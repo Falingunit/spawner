@@ -1,0 +1,3 @@
+﻿<Project>
+  <Import Project="../build/spawner-backend.props" />
+</Project>
