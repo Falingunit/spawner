@@ -60,6 +60,16 @@ Output:
 - Backend publish output in `.tmp-build/backend`
 - Frontend static files in `Frontend/spawner/dist`
 
+## Install (Prebuilt Release)
+
+If GitHub Releases are enabled with `.github/workflows/release-per-commit.yml`, each commit can publish prebuilt artifacts:
+
+- `spawner-backend-linux-x64-<commit>.tar.gz`
+- `spawner-frontend-dist-<commit>.tar.gz`
+- `spawner-full-linux-x64-<commit>.tar.gz` (recommended)
+
+For Ubuntu Server setup using the prebuilt release packages, see `docs/ubuntu-server-lts.md`.
+
 ## Ubuntu Server LTS install / setup
 
 See `docs/ubuntu-server-lts.md`.
@@ -82,3 +92,16 @@ Runtime requirement:
 ## CI
 
 GitHub Actions workflow: `.github/workflows/ci.yml`
+
+## Prebuilt Releases Per Commit
+
+This repo also includes `.github/workflows/release-per-commit.yml`, which can create a prebuilt GitHub Release for each pushed commit:
+
+- backend publish (`linux-x64`, framework-dependent, .NET 10)
+- frontend static build (`dist/`)
+- combined package (`backend` + `www`)
+
+Important:
+
+- `Frontend/spawner` must be tracked as a normal folder (not a gitlink/submodule pointer), or the release workflow will fail early with a clear error.
+- GitHub Actions must be enabled for the repository, and the workflow file must be committed to the default branch.

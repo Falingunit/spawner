@@ -3,9 +3,14 @@
 This guide installs and runs Spawner on Ubuntu Server LTS using:
 
 - `.NET 10 SDK / Runtime`
-- `Node.js 20` (for building the frontend)
+- `Node.js` (only required when building the frontend from source)
 - `systemd` (backend service)
 - `nginx` (reverse proxy + static frontend hosting)
+
+You can deploy either:
+
+- `Option A (recommended):` install from prebuilt GitHub Release artifacts
+- `Option B:` build from source on the server
 
 ## 1. Install system dependencies
 
@@ -31,7 +36,7 @@ Verify:
 dotnet --info
 ```
 
-## 3. Install Node.js 20 (build-time only)
+## 3. Install Node.js (build-time only, source-build deployments)
 
 ```bash
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
@@ -39,6 +44,8 @@ sudo apt install -y nodejs
 node -v
 npm -v
 ```
+
+Skip this step if you deploy using the prebuilt release package.
 
 ## 4. Create app user and directories
 
@@ -49,7 +56,26 @@ sudo mkdir -p /opt/spawner/www
 sudo chown -R spawner:spawner /opt/spawner
 ```
 
-## 5. Copy source and build artifacts
+## 5. Install application files
+
+Choose one of the following installation methods.
+
+### Option A: Install from prebuilt GitHub Release (recommended)
+
+Download the combined package from the release for the commit you want:
+
+```bash
+cd /tmp
+wget https://github.com/<owner>/<repo>/releases/download/commit-<sha>/spawner-full-linux-x64-<sha>.tar.gz
+tar -xzf spawner-full-linux-x64-<sha>.tar.gz
+sudo rm -rf /opt/spawner/app/backend
+sudo mkdir -p /opt/spawner/app
+sudo cp -r spawner/backend /opt/spawner/app/backend
+sudo rm -rf /opt/spawner/www/*
+sudo cp -r spawner/www/* /opt/spawner/www/
+```
+
+### Option B: Build from source on the server
 
 From your deployment checkout location:
 
@@ -185,6 +211,24 @@ sudo certbot --nginx -d your-domain.example
 ```
 
 ## 10. Upgrade / redeploy process
+
+### Option A: Upgrade using prebuilt release package
+
+```bash
+cd /tmp
+wget https://github.com/<owner>/<repo>/releases/download/commit-<sha>/spawner-full-linux-x64-<sha>.tar.gz
+tar -xzf spawner-full-linux-x64-<sha>.tar.gz
+sudo rm -rf /opt/spawner/app/backend
+sudo cp -r spawner/backend /opt/spawner/app/backend
+sudo rm -rf /opt/spawner/www/*
+sudo cp -r spawner/www/* /opt/spawner/www/
+sudo chown -R spawner:spawner /opt/spawner/app
+sudo chown -R www-data:www-data /opt/spawner/www
+sudo systemctl restart spawner
+sudo systemctl status spawner
+```
+
+### Option B: Upgrade from source
 
 ```bash
 # Pull latest source

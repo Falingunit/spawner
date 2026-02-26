@@ -1,0 +1,97 @@
+name: Release Per Commit
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    env:
+      TAG_NAME: commit-${{ github.sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify frontend source exists
+        run: |
+          test -f Frontend/spawner/package.json || {
+            echo "Frontend source is missing from this repo checkout."
+            echo "This usually means Frontend/spawner is still tracked as a gitlink/submodule pointer."
+            echo "Convert Frontend/spawner to a normal tracked folder first."
+            exit 1
+          }
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Setup Node.js (latest 25.x)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "25"
+          check-latest: true
+          cache: "npm"
+          cache-dependency-path: Frontend/spawner/package-lock.json
+
+      - name: Update npm to latest
+        run: npm install -g npm@latest
+
+      - name: Show tool versions
+        run: |
+          dotnet --version
+          node --version
+          npm --version
+
+      - name: Restore and test backend
+        run: dotnet test spawner.sln --configuration Release
+
+      - name: Publish backend (linux-x64)
+        run: dotnet publish Spawner/Spawner.csproj -c Release -r linux-x64 --self-contained false -o out/backend
+
+      - name: Build frontend
+        working-directory: Frontend/spawner
+        run: |
+          npm ci
+          npm run build
+
+      - name: Assemble release package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out/package/spawner/backend
+          mkdir -p out/package/spawner/www
+          cp -R out/backend/. out/package/spawner/backend/
+          cp -R Frontend/spawner/dist/. out/package/spawner/www/
+          printf "commit=%s\nbuilt_at=%s\n" "$GITHUB_SHA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > out/package/spawner/BUILD_INFO.txt
+          tar -czf out/spawner-backend-linux-x64-${GITHUB_SHA}.tar.gz -C out backend
+          tar -czf out/spawner-frontend-dist-${GITHUB_SHA}.tar.gz -C Frontend/spawner dist
+          tar -czf out/spawner-full-linux-x64-${GITHUB_SHA}.tar.gz -C out/package spawner
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: spawner-${{ github.sha }}
+          path: |
+            out/spawner-backend-linux-x64-${{ github.sha }}.tar.gz
+            out/spawner-frontend-dist-${{ github.sha }}.tar.gz
+            out/spawner-full-linux-x64-${{ github.sha }}.tar.gz
+          if-no-files-found: error
+
+      - name: Create/update GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          name: Build ${{ github.sha }}
+          prerelease: true
+          generate_release_notes: true
+          make_latest: false
+          fail_on_unmatched_files: true
+          files: |
+            out/spawner-backend-linux-x64-${{ github.sha }}.tar.gz
+            out/spawner-frontend-dist-${{ github.sha }}.tar.gz
+            out/spawner-full-linux-x64-${{ github.sha }}.tar.gz
