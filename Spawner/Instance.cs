@@ -1,11 +1,8 @@
-﻿using Microsoft.Extensions.Options;
-using Spawner.JavaManager;
-using System.Net.Mail;
+﻿using Spawner.JavaManager;
 using System.Security.Cryptography;
-using System.Linq;
+using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
-using System.Text;
 
 namespace Spawner
 {
@@ -66,16 +63,16 @@ namespace Spawner
 			};
 		}
 
-			public async Task InitializeVanillaInstance(Func<InstanceDownloadProgress, Task>? onProgress = null, Func<JavaDownloadProgress, Task>? onProgressJava = null, CancellationToken ct = default)
-			{
-				if (string.IsNullOrWhiteSpace(InstanceProperties.GameVersion))
-					throw new InvalidOperationException("Instance GameVersion is required.");
-				if (string.IsNullOrWhiteSpace(InstanceProperties.InstanceID))
-					throw new InvalidOperationException("Instance InstanceID is required.");
+		public async Task InitializeVanillaInstance(Func<InstanceDownloadProgress, Task>? onProgress = null, Func<JavaDownloadProgress, Task>? onProgressJava = null, CancellationToken ct = default)
+		{
+			if (string.IsNullOrWhiteSpace(InstanceProperties.GameVersion))
+				throw new InvalidOperationException("Instance GameVersion is required.");
+			if (string.IsNullOrWhiteSpace(InstanceProperties.InstanceID))
+				throw new InvalidOperationException("Instance InstanceID is required.");
 
-				// Large downloads (server jar, Java runtime) can legitimately take longer than HttpClient's
-				// default timeout. Rely on the CancellationToken instead.
-				using var client = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+			// Large downloads (server jar, Java runtime) can legitimately take longer than HttpClient's
+			// default timeout. Rely on the CancellationToken instead.
+			using var client = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
 
 			var manifestJson = await client.GetStringAsync("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json", ct);
 			JsonNode? manifest = JsonNode.Parse(manifestJson);
@@ -100,27 +97,27 @@ namespace Spawner
 				throw new Exception("Failed to get server download URL.");
 			if (string.IsNullOrWhiteSpace(serverJarSha1))
 				throw new Exception("Failed to get server jar SHA1.");
-				if (serverJarSize is null || serverJarSize.Value <= 0)
-					throw new Exception("Failed to get server jar size.");
+			if (serverJarSize is null || serverJarSize.Value <= 0)
+				throw new Exception("Failed to get server jar size.");
 
-				var instanceDir = InstanceProperties.InstanceDirectory;
-				if (string.IsNullOrWhiteSpace(instanceDir))
-					instanceDir = Path.Combine(InstanceManager.GetDefaultInstancesLocation(), InstanceProperties.InstanceID);
+			var instanceDir = InstanceProperties.InstanceDirectory;
+			if (string.IsNullOrWhiteSpace(instanceDir))
+				instanceDir = Path.Combine(InstanceManager.GetDefaultInstancesLocation(), InstanceProperties.InstanceID);
 
-				var serverJarFileName = "server.jar";
-				var destinationPath = Path.Combine(instanceDir, serverJarFileName);
+			var serverJarFileName = "server.jar";
+			var destinationPath = Path.Combine(instanceDir, serverJarFileName);
 
-				var progress = new Progress<(long received, long? total)>(p =>
-				{
-					var (received, total) = p;
+			var progress = new Progress<(long received, long? total)>(p =>
+			{
+				var (received, total) = p;
 				if (onProgress != null)
 				{
 					_ = onProgress(new InstanceDownloadProgress(
-						InstanceProperties.InstanceID,
-						serverJarFileName,
-						received,
-						total
-					));
+							InstanceProperties.InstanceID,
+							serverJarFileName,
+							received,
+							total
+						));
 				}
 			});
 
@@ -139,40 +136,123 @@ namespace Spawner
 
 			await JavaRuntimeManager.InstallNewJavaVersion(client, javaVersion, onProgressJava, ct);
 
-				var javaPath = JavaRuntimeManager.GetInstalledJavaVersions().GetValueOrDefault(javaVersion);
-				if (string.IsNullOrWhiteSpace(javaPath))
-					throw new Exception("Failed to get installed java path.");
+			var javaPath = JavaRuntimeManager.GetInstalledJavaVersions().GetValueOrDefault(javaVersion);
+			if (string.IsNullOrWhiteSpace(javaPath))
+				throw new Exception("Failed to get installed java path.");
 
-				InstanceProperties.JavaPath = javaPath;
-				InstanceProperties.InstanceDirectory = instanceDir;
-				InstanceProperties.ServerJarName = serverJarFileName;
-				InstanceProperties.JavaArgs = _settings.DefaultJavaArgs;
-				InstanceProperties.IsInitialized = true;
+			InstanceProperties.JavaPath = javaPath;
+			InstanceProperties.InstanceDirectory = instanceDir;
+			InstanceProperties.ServerJarName = serverJarFileName;
+			InstanceProperties.JavaArgs = _settings.DefaultJavaArgs;
+			InstanceProperties.IsInitialized = true;
 
 			// Create baseline config files so the instance is ready to start and editable in the UI.
 			Directory.CreateDirectory(InstanceProperties.InstanceDirectory);
 
-			var eulaPath = Path.Combine(InstanceProperties.InstanceDirectory, "eula.txt");
-			if (!File.Exists(eulaPath))
-				File.WriteAllText(eulaPath, "eula=true\n", Encoding.UTF8);
-
-				// Do not auto-create server.properties; the server will generate it on first run.
-
-			}
-
-		public void InitializeFabricInstance()
-		{
-			throw new NotImplementedException("Fabric instance initialization is not implemented yet.");
 		}
 
-			public async Task InitializeInstance(Func<InstanceDownloadProgress, Task>? onProgress = null, Func<JavaDownloadProgress, Task>? onProgressJava = null, CancellationToken ct = default)
-			{
-				if (InstanceProperties.IsInitialized) return;
+		public async Task InitializeFabricInstance(Func<InstanceDownloadProgress, Task>? onProgress = null, Func<JavaDownloadProgress, Task>? onProgressJava = null, CancellationToken ct = default)
+		{
+			if (string.IsNullOrWhiteSpace(InstanceProperties.GameVersion))
+				throw new InvalidOperationException("Instance GameVersion is required.");
+			if (string.IsNullOrWhiteSpace(InstanceProperties.FabricLoaderVersion))
+				throw new InvalidOperationException("Instance FabricLoaderVersion is required.");
+			if (string.IsNullOrWhiteSpace(InstanceProperties.InstanceID))
+				throw new InvalidOperationException("Instance InstanceID is required.");
 
-				if (InstanceProperties.InstanceType == InstanceType.Vanilla) await InitializeVanillaInstance(onProgress, onProgressJava, ct);
-				else if (InstanceProperties.InstanceType == InstanceType.Fabric) InitializeFabricInstance();
-				else if (InstanceProperties.InstanceType == InstanceType.Custom) InstanceProperties.IsInitialized = true;
+			// Large downloads (server jar, Java runtime) can legitimately take longer than HttpClient's
+			// default timeout. Rely on the CancellationToken instead.
+			using var client = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+
+			var manifestJson = await client.GetStringAsync("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json", ct);
+			JsonNode? manifest = JsonNode.Parse(manifestJson);
+
+			var versions = manifest?["versions"]?.AsArray() ?? throw new Exception("Failed to fetch Minecraft versions.");
+			var match = versions.FirstOrDefault(v => v?["id"]?.ToString() == InstanceProperties.GameVersion);
+			if (match is null)
+				throw new InvalidOperationException($"Unknown Minecraft version '{InstanceProperties.GameVersion}'.");
+
+			var versionUrl = match?["url"]?.ToString();
+			if (string.IsNullOrWhiteSpace(versionUrl))
+				throw new Exception("Missing version URL in manifest.");
+
+			var versionInfoResult = await client.GetStringAsync(versionUrl, ct);
+			JsonNode? versionInfo = JsonNode.Parse(versionInfoResult);
+
+			var fabricInstallerJson = await client.GetStringAsync("https://meta.fabricmc.net/v2/versions/installer", ct);
+			JsonArray fabricInstallerManifest = (JsonArray)JsonNode.Parse(fabricInstallerJson)!;
+
+			Version latestVersion = Version.Parse("0.0.0");
+			foreach (var item in fabricInstallerManifest)
+			{
+				var version = Version.Parse(item?["version"]?.ToString()!);
+				if (version >= latestVersion)
+				{
+					latestVersion = version;
+				}
 			}
+
+			var serverDownloadUrl = $"https://meta.fabricmc.net/v2/versions/loader/{InstanceProperties.GameVersion}/{InstanceProperties.FabricLoaderVersion}/{latestVersion}/server/jar";
+
+			if (string.IsNullOrWhiteSpace(serverDownloadUrl))
+				throw new Exception("Failed to get server download URL.");
+
+			var instanceDir = InstanceProperties.InstanceDirectory;
+			if (string.IsNullOrWhiteSpace(instanceDir))
+				instanceDir = Path.Combine(InstanceManager.GetDefaultInstancesLocation(), InstanceProperties.InstanceID);
+
+			var serverJarFileName = "server.jar";
+			var destinationPath = Path.Combine(instanceDir, serverJarFileName);
+
+			var progress = new Progress<(long received, long? total)>(p =>
+			{
+				var (received, total) = p;
+				if (onProgress != null)
+				{
+					_ = onProgress(new InstanceDownloadProgress(
+							InstanceProperties.InstanceID,
+							serverJarFileName,
+							received,
+							total
+						));
+				}
+			});
+
+			await Download.DownloadFile(
+				client,
+				serverDownloadUrl,
+				destinationPath,
+				progress,
+				ct: ct);
+
+			// Download java (if it doesn't already exist)
+			string javaVersion = versionInfo?["javaVersion"]?["majorVersion"]?.ToString()
+				?? throw new Exception("Failed to get java version.");
+
+			await JavaRuntimeManager.InstallNewJavaVersion(client, javaVersion, onProgressJava, ct);
+
+			var javaPath = JavaRuntimeManager.GetInstalledJavaVersions().GetValueOrDefault(javaVersion);
+			if (string.IsNullOrWhiteSpace(javaPath))
+				throw new Exception("Failed to get installed java path.");
+
+			InstanceProperties.JavaPath = javaPath;
+			InstanceProperties.InstanceDirectory = instanceDir;
+			InstanceProperties.ServerJarName = serverJarFileName;
+			InstanceProperties.JavaArgs = _settings.DefaultJavaArgs;
+			InstanceProperties.IsInitialized = true;
+
+			// Create baseline config files so the instance is ready to start and editable in the UI.
+			Directory.CreateDirectory(InstanceProperties.InstanceDirectory);
+		}
+
+		public async Task InitializeInstance(Func<InstanceDownloadProgress, Task>? onProgress = null, Func<JavaDownloadProgress, Task>? onProgressJava = null, CancellationToken ct = default)
+		{
+			if (InstanceProperties.IsInitialized) return;
+
+			if (InstanceProperties.InstanceType == InstanceType.Vanilla) await InitializeVanillaInstance(onProgress, onProgressJava, ct);
+			else if (InstanceProperties.InstanceType == InstanceType.Fabric) await InitializeFabricInstance(onProgress, onProgressJava, ct);
+			else if (InstanceProperties.InstanceType == InstanceType.Custom) InstanceProperties.IsInitialized = true;
+		}
 
 		public ServerProperties? GetServerProperties()
 		{
@@ -257,12 +337,12 @@ namespace Spawner
 	public class InstanceProperties
 	{
 		public string InstanceName { get; set; } = "";
-		public string InstanceID { get; set;} = "";
+		public string InstanceID { get; set; } = "";
 
-		public string InstanceDirectory {get; set;} = "";
-		public string JavaPath {get; set;} = "";
-		public string JavaArgs {get; set;} = "";
-		public string ServerJarName {get; set;} = "";
+		public string InstanceDirectory { get; set; } = "";
+		public string JavaPath { get; set; } = "";
+		public string JavaArgs { get; set; } = "";
+		public string ServerJarName { get; set; } = "";
 
 		public bool IsInitialized { get; set; } = false;
 		public bool IsArchived { get; set; } = false;
@@ -272,12 +352,12 @@ namespace Spawner
 		public string? FabricLoaderVersion { get; set; } = null;
 	}
 
-		public enum InstanceType
-		{
-			Vanilla = 0,
-			Fabric = 1,
-			Custom = 2,
-		}
+	public enum InstanceType
+	{
+		Vanilla = 0,
+		Fabric = 1,
+		Custom = 2,
+	}
 
 	public enum InstanceStatus
 	{

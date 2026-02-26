@@ -230,6 +230,20 @@ namespace Spawner
 			SaveInstanceProperties(_instancesLocation);
 		}
 
+		public void RenameInstance(string instanceID, string instanceName)
+		{
+			if (string.IsNullOrWhiteSpace(instanceID))
+				throw new ArgumentException("Instance ID is required.", nameof(instanceID));
+
+			var nextName = (instanceName ?? "").Trim();
+			if (nextName.Length == 0)
+				throw new ArgumentException("Instance name is required.", nameof(instanceName));
+
+			var inst = GetInstanceOrThrow(instanceID);
+			inst.InstanceProperties.InstanceName = nextName;
+			SaveInstanceProperties(_instancesLocation);
+		}
+
 		public Instance GetInstance(string instanceID) => GetInstanceOrThrow(instanceID);
 
 		public bool DeleteInstance(string instanceID, bool deleteFiles = true)

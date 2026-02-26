@@ -71,12 +71,13 @@ namespace Spawner.Controllers;
 		return Ok(payload);
 	}
 
-		// -------------------- Create server (vanilla only for now) --------------------
+		// -------------------- Create server --------------------
 
 	public sealed record CreateServerReq(
 		[property: JsonPropertyName("name")] string? Name,
 		[property: JsonPropertyName("type")] string? Type,
-		[property: JsonPropertyName("version")] string? Version
+		[property: JsonPropertyName("version")] string? Version,
+		[property: JsonPropertyName("fabricLoaderVersion")] string? FabricLoaderVersion
 	);
 
 		[HttpPost("servers")]
@@ -90,8 +91,8 @@ namespace Spawner.Controllers;
 		if (!Enum.TryParse<Spawner.InstanceType>(typeRaw, ignoreCase: true, out var instanceType))
 			return BadRequest(new { error = new { code = "bad_request", message = "Unknown instance type" } });
 
-		if (instanceType != Spawner.InstanceType.Vanilla)
-			return StatusCode(501, new { error = new { code = "not_implemented", message = "Only vanilla instance creation is implemented right now" } });
+		if (instanceType == Spawner.InstanceType.Custom)
+			return StatusCode(501, new { error = new { code = "not_implemented", message = "Use import endpoint for custom instances" } });
 
 		var version = (body?.Version ?? "").Trim();
 		if (version.Length == 0)
@@ -101,6 +102,18 @@ namespace Spawner.Controllers;
 		if (manifest.Versions.All(v => !string.Equals(v.Id, version, StringComparison.OrdinalIgnoreCase)))
 			return BadRequest(new { error = new { code = "bad_request", message = "Unknown Minecraft version" } });
 
+		string? fabricLoaderVersion = null;
+		if (instanceType == Spawner.InstanceType.Fabric)
+		{
+			fabricLoaderVersion = (body?.FabricLoaderVersion ?? "").Trim();
+			if (fabricLoaderVersion.Length == 0)
+				return BadRequest(new { error = new { code = "bad_request", message = "fabricLoaderVersion is required for Fabric instances" } });
+
+			var loaders = await GetFabricLoaderVersions(version, ct);
+			if (!loaders.Contains(fabricLoaderVersion))
+				return BadRequest(new { error = new { code = "bad_request", message = "Unknown Fabric loader version for selected game version" } });
+		}
+
 		var id = Guid.NewGuid().ToString("N");
 		var instanceDir = Path.Combine(_manager.InstancesLocation, id);
 		var props = new Spawner.InstanceProperties
@@ -109,6 +122,7 @@ namespace Spawner.Controllers;
 			InstanceName = name,
 			InstanceType = instanceType,
 			GameVersion = version,
+			FabricLoaderVersion = fabricLoaderVersion,
 			IsInitialized = false,
 			InstanceDirectory = instanceDir,
 			ServerJarName = "server.jar",
@@ -121,7 +135,7 @@ namespace Spawner.Controllers;
 			Directory.CreateDirectory(instanceDir);
 			var eulaPath = Path.Combine(instanceDir, "eula.txt");
 			if (!System.IO.File.Exists(eulaPath))
-				System.IO.File.WriteAllText(eulaPath, "eula=true\n", Encoding.UTF8);
+				System.IO.File.WriteAllText(eulaPath, "#\n#\neula=true\n", Encoding.UTF8);
 			// Do not auto-create server.properties; the server will generate it on first run.
 
 		// Begin downloading/initializing in the background. Progress is published as server.patch(init=...).
@@ -258,7 +272,7 @@ namespace Spawner.Controllers;
 			// Ensure baseline config files exist so the instance is editable and startable.
 				var eulaPath = Path.Combine(instanceDir, "eula.txt");
 				if (!System.IO.File.Exists(eulaPath))
-					System.IO.File.WriteAllText(eulaPath, "eula=true\n", Encoding.UTF8);
+					System.IO.File.WriteAllText(eulaPath, "#\n#\neula=true\n", Encoding.UTF8);
 				// Do not auto-create server.properties; the server will generate it on first run.
 
 			var props = new Spawner.InstanceProperties
@@ -385,7 +399,7 @@ namespace Spawner.Controllers;
 			{
 				id = t.ToString().ToLowerInvariant(),
 				label = t.ToString(),
-				implemented = t == Spawner.InstanceType.Vanilla || t == Spawner.InstanceType.Custom
+				implemented = t == Spawner.InstanceType.Vanilla || t == Spawner.InstanceType.Fabric || t == Spawner.InstanceType.Custom
 			});
 
 			return Ok(new { types, serverTime = DateTime.UtcNow.ToString("O") });
@@ -394,6 +408,33 @@ namespace Spawner.Controllers;
 		// -------------------- Instance settings --------------------
 
 		public sealed record SetInstanceTypeReq([property: JsonPropertyName("type")] string? Type);
+		public sealed record RenameInstanceReq([property: JsonPropertyName("name")] string? Name);
+
+		[HttpPost("servers/{serverId}:rename")]
+		public IActionResult RenameInstance([FromRoute] string serverId, [FromBody] RenameInstanceReq body)
+		{
+			var name = (body?.Name ?? "").Trim();
+			if (name.Length == 0)
+				return BadRequest(new { error = new { code = "bad_request", message = "Name is required" } });
+
+			try
+			{
+				_manager.RenameInstance(serverId, name);
+			}
+			catch (KeyNotFoundException)
+			{
+				return NotFound(new { error = new { code = "not_found", message = "Server not found" } });
+			}
+			catch (ArgumentException ex)
+			{
+				return BadRequest(new { error = new { code = "bad_request", message = ex.Message } });
+			}
+
+			_bus?.Publish(Topics.Servers, new { kind = "server.patch", serverId, patch = new { name } });
+			_bus?.Publish(Topics.Servers, new { kind = "snapshot", servers = BuildServerDtos() });
+
+			return Ok(new { name, serverTime = DateTime.UtcNow.ToString("O") });
+		}
 
 		[HttpPost("servers/{serverId}:set-type")]
 		public IActionResult SetInstanceType([FromRoute] string serverId, [FromBody] SetInstanceTypeReq body)
@@ -1462,5 +1503,32 @@ namespace Spawner.Controllers;
 		}
 
 		return manifest;
+	}
+
+	private static async Task<HashSet<string>> GetFabricLoaderVersions(string gameVersion, CancellationToken ct)
+	{
+		if (string.IsNullOrWhiteSpace(gameVersion))
+			return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+		using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+		using var res = await client.GetAsync(
+			$"https://meta.fabricmc.net/v2/versions/loader/{Uri.EscapeDataString(gameVersion)}",
+			ct);
+		if (!res.IsSuccessStatusCode)
+			throw new InvalidOperationException("Failed to fetch Fabric loader versions.");
+
+		await using var stream = await res.Content.ReadAsStreamAsync(ct);
+		var list = await JsonSerializer.DeserializeAsync<List<JsonObject>>(stream, JsonOpts, ct)
+			?? new List<JsonObject>();
+
+		var versions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+		foreach (var item in list)
+		{
+			var value = item?["loader"]?["version"]?.ToString()?.Trim();
+			if (!string.IsNullOrWhiteSpace(value))
+				versions.Add(value);
+		}
+
+		return versions;
 	}
 }
