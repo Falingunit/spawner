@@ -6,6 +6,13 @@ using System.Net.WebSockets;
 using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
+var allowedCorsOrigins = builder.Configuration
+	.GetSection("Cors:AllowedOrigins")
+	.Get<string[]>()?
+	.Where(static x => !string.IsNullOrWhiteSpace(x))
+	.Select(static x => x.Trim().TrimEnd('/'))
+	.Distinct(StringComparer.OrdinalIgnoreCase)
+	.ToArray() ?? [];
 
 builder.Services.AddControllers();
 
@@ -23,15 +30,31 @@ builder.Services.AddSingleton<IdempotencyStore>();
 builder.Services.AddSingleton<ConsoleStore>();
 builder.Services.AddSingleton<EventBus>();
 builder.Services.AddSingleton<StatePublisher>();
-// CORS: allow everything
+builder.Services.AddSingleton<ModrinthClient>();
+// CORS:
+// - Development: allow any origin for local UI work.
+// - Production: same-origin by default unless explicit origins are configured.
 builder.Services.AddCors(options =>
 {
 	options.AddDefaultPolicy(policy =>
 	{
+		if (builder.Environment.IsDevelopment())
+		{
+			policy
+				.AllowAnyOrigin()
+				.AllowAnyMethod()
+				.AllowAnyHeader();
+			return;
+		}
+
 		policy
-			.AllowAnyOrigin()
 			.AllowAnyMethod()
 			.AllowAnyHeader();
+
+		if (allowedCorsOrigins.Length > 0)
+		{
+			policy.WithOrigins(allowedCorsOrigins);
+		}
 	});
 });
 
