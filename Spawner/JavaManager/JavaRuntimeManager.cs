@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Formats.Tar;
 using System.IO.Compression;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -136,25 +137,70 @@ namespace Spawner.JavaManager
 
 		private static void ExtractJre(string jreDownloadPath, string jreFinalDir)
 		{
-			using var archive = ZipFile.OpenRead(jreDownloadPath);
+			if (Directory.Exists(jreFinalDir))
+				Directory.Delete(jreFinalDir, recursive: true);
 
-			foreach (var entry in archive.Entries)
+			var tempExtractDir = Path.Combine(Path.GetTempPath(), "spawner-jre-extract-" + Guid.NewGuid().ToString("N"));
+			Directory.CreateDirectory(tempExtractDir);
+
+			try
 			{
-				if (string.IsNullOrEmpty(entry.Name))
-					continue;
+				var lower = Path.GetFileName(jreDownloadPath).ToLowerInvariant();
 
-				var parts = entry.FullName.Split('/', '\\');
-				if (parts.Length <= 1)
-					continue;
+				if (lower.EndsWith(".zip", StringComparison.Ordinal))
+				{
+					ZipFile.ExtractToDirectory(jreDownloadPath, tempExtractDir, overwriteFiles: true);
+				}
+				else if (lower.EndsWith(".tar.gz", StringComparison.Ordinal) || lower.EndsWith(".tgz", StringComparison.Ordinal))
+				{
+					using var fs = File.OpenRead(jreDownloadPath);
+					using var gz = new GZipStream(fs, CompressionMode.Decompress);
+					TarFile.ExtractToDirectory(gz, tempExtractDir, overwriteFiles: true);
+				}
+				else
+				{
+					throw new NotSupportedException($"Unsupported Java archive format: {jreDownloadPath}");
+				}
 
-				string relativePath = Path.Combine(parts[1..]);
-				string destinationPath = Path.Combine(jreFinalDir, relativePath);
+				// Adoptium archives usually contain a single top-level folder (e.g. jdk-xx/).
+				// Normalize by flattening that folder into the target runtime directory.
+				var topDirs = Directory.GetDirectories(tempExtractDir, "*", SearchOption.TopDirectoryOnly);
+				var topFiles = Directory.GetFiles(tempExtractDir, "*", SearchOption.TopDirectoryOnly);
+				var extractRoot = (topFiles.Length == 0 && topDirs.Length == 1) ? topDirs[0] : tempExtractDir;
 
-				var dir = Path.GetDirectoryName(destinationPath);
-				if (!string.IsNullOrEmpty(dir))
-					Directory.CreateDirectory(dir);
+				Directory.CreateDirectory(jreFinalDir);
+				CopyDirectoryRecursive(extractRoot, jreFinalDir);
 
-				entry.ExtractToFile(destinationPath, overwrite: true);
+				// Ensure java binary is executable on Unix if permission bits were not preserved.
+				if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+				{
+					var javaPath = Path.Combine(jreFinalDir, "bin", "java");
+					if (File.Exists(javaPath))
+					{
+						try
+						{
+							var mode = File.GetUnixFileMode(javaPath);
+							mode |= UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute;
+							File.SetUnixFileMode(javaPath, mode);
+						}
+						catch
+						{
+							// best-effort
+						}
+					}
+				}
+			}
+			finally
+			{
+				try
+				{
+					if (Directory.Exists(tempExtractDir))
+						Directory.Delete(tempExtractDir, recursive: true);
+				}
+				catch
+				{
+					// best-effort cleanup
+				}
 			}
 		}
 
@@ -178,6 +224,23 @@ namespace Spawner.JavaManager
 			catch
 			{
 				// best-effort backup
+			}
+		}
+
+		private static void CopyDirectoryRecursive(string srcDir, string dstDir)
+		{
+			Directory.CreateDirectory(dstDir);
+
+			foreach (var file in Directory.EnumerateFiles(srcDir, "*", SearchOption.TopDirectoryOnly))
+			{
+				var name = Path.GetFileName(file);
+				File.Copy(file, Path.Combine(dstDir, name), overwrite: true);
+			}
+
+			foreach (var sub in Directory.EnumerateDirectories(srcDir, "*", SearchOption.TopDirectoryOnly))
+			{
+				var name = Path.GetFileName(sub);
+				CopyDirectoryRecursive(sub, Path.Combine(dstDir, name));
 			}
 		}
 	}
