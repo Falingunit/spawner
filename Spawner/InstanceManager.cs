@@ -42,7 +42,7 @@ namespace Spawner
 				{
 					try { return Path.GetFullPath(p); } catch { return p; }
 				})
-				.Distinct(StringComparer.OrdinalIgnoreCase)
+				.Distinct(FileSystemPath.Comparer)
 				.ToArray();
 		}
 
@@ -263,11 +263,10 @@ namespace Spawner
 
 						if (!string.IsNullOrWhiteSpace(dir))
 						{
-							var root = Path.GetFullPath(_instancesLocation).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
 							var full = Path.GetFullPath(dir);
 
 							// Safety: never delete outside InstancesLocation.
-							if (full.StartsWith(root, StringComparison.OrdinalIgnoreCase) && Directory.Exists(full))
+							if (FileSystemPath.IsSameOrDescendant(_instancesLocation, full) && Directory.Exists(full))
 								Directory.Delete(full, recursive: true);
 						}
 					}

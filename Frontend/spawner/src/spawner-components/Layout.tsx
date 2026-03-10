@@ -41,7 +41,16 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     () => pathname.split("/").filter(Boolean),
     [pathname]
   );
-  const servers = useServerStore((s) => s.servers);
+  const activeServerId = React.useMemo(
+    () => (segments[0] === "servers" && segments[1] ? decodeURIComponent(segments[1]) : ""),
+    [segments],
+  );
+  const activeServerName = useServerStore(
+    React.useCallback(
+      (s) => (activeServerId ? s.servers.find((server) => server.id === activeServerId)?.name : undefined),
+      [activeServerId],
+    ),
+  );
 
   const [isDark, setIsDark] = React.useState(false);
 
@@ -63,13 +72,11 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const breadcrumbLabel = React.useCallback(
     (seg: string, idx: number) => {
       if (segments[0] === "servers" && idx === 1) {
-        const id = decodeURIComponent(seg);
-        const server = servers.find((s) => s.id === id);
-        return server?.name?.trim() || "Server";
+        return activeServerName?.trim() || "Server";
       }
       return prettify(seg);
     },
-    [segments, servers],
+    [activeServerName, segments],
   );
 
   return (

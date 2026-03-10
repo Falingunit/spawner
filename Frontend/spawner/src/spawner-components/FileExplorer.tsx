@@ -87,6 +87,7 @@ export function FileExplorer({ serverId }: { serverId: string }) {
   const [err, setErr] = React.useState<string | null>(null);
 
   const [query, setQuery] = React.useState("");
+  const deferredQuery = React.useDeferredValue(query);
   const [selected, setSelected] = React.useState<Entry | null>(null);
   const [open, setOpen] = React.useState<Entry | null>(null);
   const [openModal, setOpenModal] = React.useState(false);
@@ -604,10 +605,10 @@ export function FileExplorer({ serverId }: { serverId: string }) {
   }, [cwd]);
 
   const filteredEntries = React.useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = deferredQuery.trim().toLowerCase();
     if (!q) return entries;
     return entries.filter((e) => e.name.toLowerCase().includes(q));
-  }, [entries, query]);
+  }, [deferredQuery, entries]);
 
   const selectionDisabled = !selected || loading;
 
@@ -823,7 +824,15 @@ export function FileExplorer({ serverId }: { serverId: string }) {
 
           <div className="relative w-full md:w-72">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search in folder" className="pl-9" />
+            <Input
+              value={query}
+              onChange={(e) => {
+                const nextValue = e.target.value;
+                React.startTransition(() => setQuery(nextValue));
+              }}
+              placeholder="Search in folder"
+              className="pl-9"
+            />
           </div>
         </div>
 

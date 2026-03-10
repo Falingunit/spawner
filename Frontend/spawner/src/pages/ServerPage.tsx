@@ -3,7 +3,6 @@ import { useParams } from "react-router-dom";
 
 import { useServerStore } from "@/stores/serverStore";
 import { createDefaultProperties, type ServerPropertiesState } from "@/lib/serverProperties";
-import { ServerPropertiesForm } from "@/spawner-components/ServerPropertiesForm";
 import MinecraftServerCard from "@/spawner-components/InstanceInfoCard";
 import type { WhitelistEntry } from "@/types/whitelist";
 
@@ -13,8 +12,6 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { FileExplorer } from "@/spawner-components/FileExplorer";
-import { ContentTab } from "@/spawner-components/ContentTab";
 import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
@@ -25,6 +22,24 @@ import { Trash2 } from "lucide-react";
 import { apiBaseUrlForBrowser } from "@/spawner-components/fileApiHelpers";
 
 const EMPTY_LINES: string[] = [];
+const TAB_PANEL_CLASS = "mt-4 min-h-[calc(100vh-var(--topbar-h)-18rem)]";
+
+const ServerPropertiesForm = React.lazy(async () => {
+  const mod = await import("@/spawner-components/ServerPropertiesForm");
+  return { default: mod.ServerPropertiesForm };
+});
+
+const FileExplorer = React.lazy(async () => {
+  const mod = await import("@/spawner-components/FileExplorer");
+  return { default: mod.FileExplorer };
+});
+
+const ContentTab = React.lazy(async () => {
+  const mod = await import("@/spawner-components/ContentTab");
+  return { default: mod.ContentTab };
+});
+
+type ServerTab = "properties" | "launch" | "whitelist" | "console" | "logs" | "files" | "content";
 
 function normalizeUuidInput(raw: string) {
   return raw.trim().replace(/-/g, "").toLowerCase();
@@ -103,7 +118,9 @@ export default function ServerPage() {
   const { id } = useParams<{ id: string }>();
   const loaded = useServerStore((s) => s.loaded);
   const storeError = useServerStore((s) => s.error);
-  const servers = useServerStore((s) => s.servers);
+  const server = useServerStore(
+    React.useCallback((s) => (id ? s.servers.find((serverEntry) => serverEntry.id === id) : undefined), [id]),
+  );
   const toggleServer = useServerStore((s) => s.toggleServer);
   const forceStopServer = useServerStore((s) => s.forceStopServer);
   const archiveServer = useServerStore((s) => s.archiveServer);
@@ -126,11 +143,6 @@ export default function ServerPage() {
   const loadLaunchSettings = useServerStore((s) => s.loadLaunchSettings);
   const saveLaunchSettingsAction = useServerStore((s) => s.saveLaunchSettings);
 
-  const server = React.useMemo(
-    () => servers.find((s) => s.id === id),
-    [servers, id],
-  );
-
   const serverId = server?.id ?? "";
 
   const storedProperties = useServerStore(
@@ -146,6 +158,9 @@ export default function ServerPage() {
       [serverId],
     ),
   );
+  const consoleLoaded = useServerStore(
+    React.useCallback((s) => (serverId ? Object.prototype.hasOwnProperty.call(s.consoleById, serverId) : false), [serverId]),
+  );
 
   const consoleLoading = useServerStore(
     React.useCallback((s) => (serverId ? Boolean(s.consoleLoadingById[serverId]) : false), [serverId]),
@@ -153,6 +168,9 @@ export default function ServerPage() {
 
   const logsLines = useServerStore(
     React.useCallback((s) => (serverId ? (s.logsById[serverId] ?? EMPTY_LINES) : EMPTY_LINES), [serverId]),
+  );
+  const logsLoaded = useServerStore(
+    React.useCallback((s) => (serverId ? Object.prototype.hasOwnProperty.call(s.logsById, serverId) : false), [serverId]),
   );
 
   const logsLoading = useServerStore(
@@ -183,6 +201,8 @@ export default function ServerPage() {
     React.useCallback((s) => (serverId ? Boolean(s.launchLoadingById[serverId]) : false), [serverId]),
   );
 
+  const [activeTab, setActiveTab] = React.useState<ServerTab>("properties");
+  const [loadedTabs, setLoadedTabs] = React.useState<Set<ServerTab>>(() => new Set(["properties"]));
   const [consoleInput, setConsoleInput] = React.useState("");
   const [properties, setProperties] = React.useState<ServerPropertiesState>(() => createDefaultProperties());
   const [propertiesQuery, setPropertiesQuery] = React.useState("");
@@ -209,6 +229,7 @@ export default function ServerPage() {
   const [instanceTypeError, setInstanceTypeError] = React.useState<string | null>(null);
 
   const [logsQuery, setLogsQuery] = React.useState("");
+  const deferredLogsQuery = React.useDeferredValue(logsQuery);
   const [logFiles, setLogFiles] = React.useState<ApiLogFile[]>([]);
   const [logsSource, setLogsSource] = React.useState<"live" | "file">("live");
   const [selectedLogFile, setSelectedLogFile] = React.useState<string>("latest.log");
@@ -237,20 +258,18 @@ export default function ServerPage() {
   const [renameNameError, setRenameNameError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
-    if (!serverId) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const t = await apiListInstanceTypes();
-        if (!cancelled) setInstanceTypes(t);
-      } catch {
-        // ignore; we can still show basic values
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    setActiveTab("properties");
+    setLoadedTabs(new Set(["properties"]));
   }, [serverId]);
+
+  React.useEffect(() => {
+    setLoadedTabs((prev) => {
+      if (prev.has(activeTab)) return prev;
+      const next = new Set(prev);
+      next.add(activeTab);
+      return next;
+    });
+  }, [activeTab]);
 
   const wlTimersRef = React.useRef<Map<string, number>>(new Map());
   const wlTokensRef = React.useRef<Map<string, number>>(new Map());
@@ -259,11 +278,11 @@ export default function ServerPage() {
   const cmdDraftRef = React.useRef("");
 
   const filteredLogs = React.useMemo(() => {
-    const q = logsQuery.trim().toLowerCase();
+    const q = deferredLogsQuery.trim().toLowerCase();
     const base = logsSource === "live" ? logsLines : logFileLines;
     if (!q) return base;
     return base.filter((l) => l.toLowerCase().includes(q));
-  }, [logFileLines, logsLines, logsQuery, logsSource]);
+  }, [deferredLogsQuery, logFileLines, logsLines, logsSource]);
 
   const refreshLogFileTail = React.useCallback(
     async (name: string) => {
@@ -285,32 +304,70 @@ export default function ServerPage() {
 
   React.useEffect(() => {
     if (!serverId) return;
+    if (activeTab !== "properties" && activeTab !== "whitelist") return;
+    if (storedProperties || propertiesLoading) return;
     void loadProperties(serverId);
-    void loadConsole(serverId);
-    void loadLogs(serverId);
-    void loadWhitelist(serverId);
-    void loadLaunchSettings(serverId);
+  }, [activeTab, loadProperties, propertiesLoading, serverId, storedProperties]);
+
+  React.useEffect(() => {
+    if (!serverId || activeTab !== "launch") return;
+    if (!storedLaunch && !launchLoading) {
+      void loadLaunchSettings(serverId);
+    }
+    if (instanceTypes.length > 0) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const t = await apiListInstanceTypes();
+        if (!cancelled) setInstanceTypes(t);
+      } catch {
+        // ignore; we can still show basic values
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, instanceTypes.length, launchLoading, loadLaunchSettings, serverId, storedLaunch]);
+
+  React.useEffect(() => {
+    if (!serverId || activeTab !== "console") return;
+    if (!consoleLoaded && !consoleLoading) {
+      void loadConsole(serverId);
+    }
     subscribeConsole(serverId);
-    subscribeLogs(serverId);
-    subscribeWhitelist(serverId);
     return () => {
       unsubscribeConsole(serverId);
+    };
+  }, [activeTab, consoleLoaded, consoleLoading, loadConsole, serverId, subscribeConsole, unsubscribeConsole]);
+
+  React.useEffect(() => {
+    if (!serverId || activeTab !== "logs") return;
+    if (!logsLoaded && !logsLoading) {
+      void loadLogs(serverId);
+    }
+    subscribeLogs(serverId);
+    return () => {
       unsubscribeLogs(serverId);
+    };
+  }, [activeTab, loadLogs, logsLoaded, logsLoading, serverId, subscribeLogs, unsubscribeLogs]);
+
+  React.useEffect(() => {
+    if (!serverId || activeTab !== "whitelist") return;
+    if (!storedWhitelist && !whitelistLoading) {
+      void loadWhitelist(serverId);
+    }
+    subscribeWhitelist(serverId);
+    return () => {
       unsubscribeWhitelist(serverId);
     };
   }, [
-    loadConsole,
-    loadLogs,
-    loadLaunchSettings,
-    loadProperties,
+    activeTab,
     loadWhitelist,
     serverId,
-    subscribeConsole,
-    subscribeLogs,
+    storedWhitelist,
     subscribeWhitelist,
-    unsubscribeConsole,
-    unsubscribeLogs,
     unsubscribeWhitelist,
+    whitelistLoading,
   ]);
 
   React.useEffect(() => {
@@ -441,6 +498,7 @@ export default function ServerPage() {
 
   React.useEffect(() => {
     if (!serverId) return;
+    if (activeTab !== "logs") return;
     let cancelled = false;
 
     (async () => {
@@ -467,14 +525,15 @@ export default function ServerPage() {
     return () => {
       cancelled = true;
     };
-  }, [serverId]);
+  }, [activeTab, serverId]);
 
   React.useEffect(() => {
     if (!serverId) return;
+    if (activeTab !== "logs") return;
     if (logsSource !== "file") return;
     if (!selectedLogFile) return;
     void refreshLogFileTail(selectedLogFile);
-  }, [refreshLogFileTail, logsSource, selectedLogFile, serverId]);
+  }, [activeTab, refreshLogFileTail, logsSource, selectedLogFile, serverId]);
 
   if (!loaded) {
     return (
@@ -1119,7 +1178,7 @@ export default function ServerPage() {
       </Dialog>
 
       <div className="mt-6">
-        <Tabs defaultValue="properties">
+        <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as ServerTab)}>
           <TabsList className="w-full justify-start">
             <TabsTrigger value="properties">
               <Settings className="mr-2 h-4 w-4" />
@@ -1151,7 +1210,8 @@ export default function ServerPage() {
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="properties" className="mt-4 min-h-[calc(100vh-var(--topbar-h)-18rem)]">
+          {loadedTabs.has("properties") ? (
+          <TabsContent value="properties" forceMount className={activeTab === "properties" ? TAB_PANEL_CLASS : "hidden"}>
             <Card className="overflow-hidden">
               <CardHeader className="pb-3">
                 <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1215,14 +1275,18 @@ export default function ServerPage() {
                       </div>
                     </div>
                   ) : (
-                    <ServerPropertiesForm value={properties} onChange={setProperties} query={propertiesQuery} />
+                    <React.Suspense fallback={<div className="text-sm text-muted-foreground">Loading server properties...</div>}>
+                      <ServerPropertiesForm value={properties} onChange={setProperties} query={propertiesQuery} />
+                    </React.Suspense>
                   )}
                 </div>
               </CardContent>
             </Card>
           </TabsContent>
+          ) : null}
 
-          <TabsContent value="launch" className="mt-4 min-h-[calc(100vh-var(--topbar-h)-18rem)]">
+          {loadedTabs.has("launch") ? (
+          <TabsContent value="launch" forceMount className={activeTab === "launch" ? TAB_PANEL_CLASS : "hidden"}>
             <Card className="overflow-hidden">
               <CardHeader className="pb-3">
                 <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1318,8 +1382,10 @@ export default function ServerPage() {
               </CardContent>
             </Card>
           </TabsContent>
+          ) : null}
 
-          <TabsContent value="whitelist" className="mt-4 min-h-[calc(100vh-var(--topbar-h)-18rem)]">
+          {loadedTabs.has("whitelist") ? (
+          <TabsContent value="whitelist" forceMount className={activeTab === "whitelist" ? TAB_PANEL_CLASS : "hidden"}>
             <Card>
               <CardHeader className="pb-3">
                 <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1430,8 +1496,10 @@ export default function ServerPage() {
               </CardContent>
             </Card>
           </TabsContent>
+          ) : null}
 
-          <TabsContent value="console" className="mt-4 min-h-[calc(100vh-var(--topbar-h)-18rem)]">
+          {loadedTabs.has("console") ? (
+          <TabsContent value="console" forceMount className={activeTab === "console" ? TAB_PANEL_CLASS : "hidden"}>
             <Card>
               <CardHeader className="pb-3">
                 <CardTitle className="text-base">Console</CardTitle>
@@ -1499,8 +1567,10 @@ export default function ServerPage() {
               </CardContent>
             </Card>
           </TabsContent>
+          ) : null}
 
-          <TabsContent value="logs" className="mt-4 min-h-[calc(100vh-var(--topbar-h)-18rem)]">
+          {loadedTabs.has("logs") ? (
+          <TabsContent value="logs" forceMount className={activeTab === "logs" ? TAB_PANEL_CLASS : "hidden"}>
             <Card>
               <CardHeader className="pb-3">
                 <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1548,7 +1618,10 @@ export default function ServerPage() {
                     <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                     <Input
                       value={logsQuery}
-                      onChange={(e) => setLogsQuery(e.target.value)}
+                      onChange={(e) => {
+                        const nextValue = e.target.value;
+                        React.startTransition(() => setLogsQuery(nextValue));
+                      }}
                       placeholder="Search logs"
                       className="pl-9"
                     />
@@ -1570,28 +1643,37 @@ export default function ServerPage() {
               </CardContent>
             </Card>
           </TabsContent>
+          ) : null}
 
-          <TabsContent value="files" className="mt-4 min-h-[calc(100vh-var(--topbar-h)-18rem)]">
+          {loadedTabs.has("files") ? (
+          <TabsContent value="files" forceMount className={activeTab === "files" ? TAB_PANEL_CLASS : "hidden"}>
             <Card>
               <CardHeader className="pb-3">
                 <CardTitle className="text-base">Files</CardTitle>
               </CardHeader>
               <CardContent>
-                <FileExplorer serverId={serverId} />
+                <React.Suspense fallback={<div className="text-sm text-muted-foreground">Loading files...</div>}>
+                  <FileExplorer serverId={serverId} />
+                </React.Suspense>
               </CardContent>
             </Card>
           </TabsContent>
+          ) : null}
 
-          <TabsContent value="content" className="mt-4 min-h-[calc(100vh-var(--topbar-h)-18rem)]">
-            <ContentTab serverId={serverId} serverVersion={server.version} serverStatus={server.status} serverType={server.type} />
+          {loadedTabs.has("content") ? (
+          <TabsContent value="content" forceMount className={activeTab === "content" ? TAB_PANEL_CLASS : "hidden"}>
+            <React.Suspense fallback={<div className="text-sm text-muted-foreground">Loading content...</div>}>
+              <ContentTab serverId={serverId} serverVersion={server.version} serverStatus={server.status} serverType={server.type} />
+            </React.Suspense>
           </TabsContent>
+          ) : null}
         </Tabs>
       </div>
     </div>
   );
 }
 
-function ConsoleBox({
+const ConsoleBox = React.memo(function ConsoleBox({
   lines,
   loading,
   wrap = true,
@@ -1635,9 +1717,9 @@ function ConsoleBox({
       </div>
     </div>
   );
-}
+});
 
-function ConsoleLine({ line }: { line: string }) {
+const ConsoleLine = React.memo(function ConsoleLine({ line }: { line: string }) {
   const isWarn = /\bWARN\b/i.test(line);
   const isError = /\bERROR\b/i.test(line);
 
@@ -1648,4 +1730,4 @@ function ConsoleLine({ line }: { line: string }) {
       : "text-foreground";
 
   return <div className={cls}>{line}</div>;
-}
+});

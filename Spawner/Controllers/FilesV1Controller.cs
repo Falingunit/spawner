@@ -375,7 +375,7 @@ public sealed class FilesV1Controller : ControllerBase
 			return true;
 		}
 
-		if (Path.IsPathRooted(relative) || relative.Contains(':'))
+		if (FileSystemPath.LooksRootedOrDriveQualified(relative))
 		{
 			error = new BadRequestObjectResult(new { error = new { code = "bad_request", message = "Invalid path" } });
 			return false;
@@ -394,9 +394,7 @@ public sealed class FilesV1Controller : ControllerBase
 
 	private static bool IsUnderRoot(string rootFull, string candidateFull)
 	{
-		var root = rootFull.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-		return candidateFull.StartsWith(root, StringComparison.OrdinalIgnoreCase) ||
-			   string.Equals(candidateFull.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), rootFull.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), StringComparison.OrdinalIgnoreCase);
+		return FileSystemPath.IsSameOrDescendant(rootFull, candidateFull);
 	}
 
 	private static string ToRel(string rootFull, string fullPath)

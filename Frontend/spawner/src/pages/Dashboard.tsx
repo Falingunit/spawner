@@ -1,15 +1,19 @@
+import * as React from "react";
+
 import MinecraftServerCard from "@/spawner-components/InstanceInfoCard";
 import { CreateInstanceDialog } from "@/spawner-components/CreateInstanceDialog";
 import { useServerStore } from "@/stores/serverStore";
+import { useShallow } from "zustand/react/shallow";
 
 export default function Dashboard() {
   const loaded = useServerStore((s) => s.loaded);
   const error = useServerStore((s) => s.error);
-  const servers = useServerStore((s) => s.servers);
   const toggleServer = useServerStore((s) => s.toggleServer);
   const forceStopServer = useServerStore((s) => s.forceStopServer);
   const refreshServers = useServerStore((s) => s.refreshServers);
-  const activeServers = servers.filter((s) => !s.archived);
+  const activeServerIds = useServerStore(
+    useShallow((s) => s.servers.filter((server) => !server.archived).map((server) => server.id)),
+  );
 
   return (
     <div className="mt-4 mx-auto w-full">
@@ -27,23 +31,47 @@ export default function Dashboard() {
         </div>
       ) : null}
 
-      {loaded && activeServers.length === 0 && !error ? (
+      {loaded && activeServerIds.length === 0 && !error ? (
         <div className="mb-6 rounded-md border border-dashed border-border bg-muted/10 p-6 text-sm text-muted-foreground">
           No instances yet. Create one to get started.
         </div>
       ) : null}
 
       <div className="grid gap-6 grid-cols-[repeat(auto-fit,minmax(min(100%,420px),1fr))]">
-        {activeServers.map((s) => (
-          <MinecraftServerCard
-            key={s.id}
-            {...s}
-            linkTo={`/servers/${s.id}`}
-            onToggle={() => toggleServer(s.id)}
-            onForceStop={() => forceStopServer(s.id)}
+        {activeServerIds.map((serverId) => (
+          <DashboardServerCard
+            key={serverId}
+            serverId={serverId}
+            onToggle={toggleServer}
+            onForceStop={forceStopServer}
           />
         ))}
       </div>
     </div>
   );
 }
+
+const DashboardServerCard = React.memo(function DashboardServerCard({
+  serverId,
+  onToggle,
+  onForceStop,
+}: {
+  serverId: string;
+  onToggle: (id: string) => Promise<void>;
+  onForceStop: (id: string) => Promise<void>;
+}) {
+  const server = useServerStore(
+    React.useCallback((s) => s.servers.find((serverEntry) => serverEntry.id === serverId), [serverId]),
+  );
+
+  if (!server || server.archived) return null;
+
+  return (
+    <MinecraftServerCard
+      {...server}
+      linkTo={`/servers/${server.id}`}
+      onToggle={() => onToggle(server.id)}
+      onForceStop={() => onForceStop(server.id)}
+    />
+  );
+});

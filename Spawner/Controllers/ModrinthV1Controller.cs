@@ -395,10 +395,10 @@ public sealed class ModrinthV1Controller : ControllerBase
 			if (System.IO.File.Exists(tmp)) System.IO.File.Delete(tmp);
 			await _modrinth.DownloadToFileAsync(nextFile.Url, tmp, ct);
 			await VerifyHashesAsync(tmp, nextFile.Hashes ?? new Dictionary<string, string>(), ct);
-			if (!string.Equals(currentPath, dst, StringComparison.OrdinalIgnoreCase) && System.IO.File.Exists(dst))
+			if (!FileSystemPath.Equals(currentPath, dst) && System.IO.File.Exists(dst))
 				return Conflict(new { error = new { code = "already_exists", message = "Updated file name already exists." } });
 			System.IO.File.Move(tmp, dst, overwrite: true);
-			if (!string.Equals(currentPath, dst, StringComparison.OrdinalIgnoreCase) && System.IO.File.Exists(currentPath))
+			if (!FileSystemPath.Equals(currentPath, dst) && System.IO.File.Exists(currentPath))
 				System.IO.File.Delete(currentPath);
 		}
 		catch (Exception ex)
@@ -929,16 +929,15 @@ public sealed class ModrinthV1Controller : ControllerBase
 
 	private static void AddInstanceOverridesToMrpack(ZipArchive zip, string instanceDir, IEnumerable<string> enabledModFileNames)
 	{
-		var root = Path.GetFullPath(instanceDir).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
 		var enabledMods = new HashSet<string>(enabledModFileNames.Where(x => !string.IsNullOrWhiteSpace(x))!, StringComparer.OrdinalIgnoreCase);
 
 		foreach (var path in Directory.EnumerateFiles(instanceDir, "*", SearchOption.AllDirectories))
 		{
 			string full;
 			try { full = Path.GetFullPath(path); } catch { continue; }
-			if (!full.StartsWith(root, StringComparison.OrdinalIgnoreCase)) continue;
+			if (!FileSystemPath.IsSameOrDescendant(instanceDir, full)) continue;
 
-			var rel = full[root.Length..].Replace('\\', '/');
+			var rel = Path.GetRelativePath(instanceDir, full).Replace('\\', '/');
 			if (string.IsNullOrWhiteSpace(rel)) continue;
 			if (!ShouldIncludeOverridePath(rel, enabledMods)) continue;
 

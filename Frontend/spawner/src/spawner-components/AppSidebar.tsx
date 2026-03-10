@@ -15,7 +15,8 @@ import {
 import { Archive, LayoutDashboard, Users, Network, Check } from "lucide-react";
 
 import { useServerStore } from "@/stores/serverStore";
-import type { Server, ServerStatus } from "@/types/server";
+import type { ServerStatus } from "@/types/server";
+import { useShallow } from "zustand/react/shallow";
 
 const STATUS_COLOR: Record<ServerStatus, string> = {
   online: "bg-emerald-500",
@@ -26,12 +27,14 @@ const STATUS_COLOR: Record<ServerStatus, string> = {
 };
 
 export function AppSidebar() {
-  const servers = useServerStore((s) => s.servers);
   const loaded = useServerStore((s) => s.loaded);
-  const activeServers = servers.filter((s) => !s.archived);
-  const archivedCount = servers.filter((s) => s.archived).length;
-  const online = activeServers.filter((s) => s.status !== "offline");
-  const offline = activeServers.filter((s) => s.status === "offline");
+  const archivedCount = useServerStore((s) => s.servers.filter((server) => server.archived).length);
+  const onlineIds = useServerStore(
+    useShallow((s) => s.servers.filter((server) => !server.archived && server.status !== "offline").map((server) => server.id)),
+  );
+  const offlineIds = useServerStore(
+    useShallow((s) => s.servers.filter((server) => !server.archived && server.status === "offline").map((server) => server.id)),
+  );
 
   return (
     <Sidebar collapsible="icon">
@@ -76,11 +79,11 @@ export function AppSidebar() {
           <SidebarDivider />
 
           <SidebarMenu>
-            {online.length === 0 ? (
+            {onlineIds.length === 0 ? (
               <SidebarEmptyText text={loaded ? "No active instances" : "Loading instances..."} />
             ) : (
-              online.map((s) => (
-                <ServerMenuItem key={s.id} server={s} />
+              onlineIds.map((serverId) => (
+                <ServerMenuItem key={serverId} serverId={serverId} />
               ))
             )}
           </SidebarMenu>
@@ -88,11 +91,11 @@ export function AppSidebar() {
           <SidebarDivider />
 
           <SidebarMenu>
-            {offline.length === 0 ? (
+            {offlineIds.length === 0 ? (
               <SidebarEmptyText text={loaded ? "No stopped instances" : "Loading instances..."} />
             ) : (
-              offline.map((s) => (
-                <ServerMenuItem key={s.id} server={s} />
+              offlineIds.map((serverId) => (
+                <ServerMenuItem key={serverId} serverId={serverId} />
               ))
             )}
           </SidebarMenu>
@@ -142,16 +145,22 @@ function MenuLink({
   );
 }
 
-function ServerMenuItem({ server }: { server: Server }) {
+function ServerMenuItem({ serverId }: { serverId: string }) {
+  const server = useServerStore(
+    React.useCallback((s) => s.servers.find((serverEntry) => serverEntry.id === serverId), [serverId]),
+  );
   const location = useLocation();
-  const active = location.pathname === `/servers/${server.id}`;
+  const active = location.pathname === `/servers/${serverId}`;
   const [copied, setCopied] = React.useState(false);
+
+  if (!server) return null;
+  const serverPort = server.port;
 
   async function copyPort(e: React.MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
     try {
-      await navigator.clipboard.writeText(String(server.port));
+      await navigator.clipboard.writeText(String(serverPort));
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1200);
     } catch {
@@ -202,10 +211,10 @@ function ServerMenuItem({ server }: { server: Server }) {
       >
         {copied ? (
           <Check className="h-4 w-4 text-emerald-500" />
-        ) : (
-          <Network className="h-4 w-4" />
-        )}
-      </SidebarMenuAction>
+                ) : (
+                  <Network className="h-4 w-4" />
+                )}
+              </SidebarMenuAction>
     </SidebarMenuItem>
   );
 }
