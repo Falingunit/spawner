@@ -150,13 +150,6 @@ namespace Spawner.Controllers;
 		{
 			var nextStatus = st.state == "downloading" ? "downloading" : "offline";
 			_bus?.Publish(Topics.Servers, new { kind = "server.patch", serverId = id, patch = new { init = st, status = nextStatus } });
-
-			// When initialization fails, remove the half-created instance to keep the list clean.
-			if (st.state == "error")
-			{
-				_manager.DeleteInstance(id, deleteFiles: true);
-				_bus?.Publish(Topics.Servers, new { kind = "snapshot", servers = BuildServerDtos() });
-			}
 		});
 
 		var created = _manager.GetInstanceProperties(id);

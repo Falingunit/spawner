@@ -145,18 +145,11 @@ function applyPatch<T extends object>(target: T, patch: unknown): T {
   return { ...target, ...(patch as Partial<T>) };
 }
 
-function upsertServers(current: Server[], next: Server[]) {
-  const byId = new Map(current.map((s) => [s.id, s] as const));
-  for (const s of next) byId.set(s.id, withIconFallback(s));
-  return Array.from(byId.values());
-}
-
 function handleServersSnapshot(set: (fn: (s: ServerStoreState) => Partial<ServerStoreState>) => void, servers: unknown) {
   if (!Array.isArray(servers)) return;
-  set((state) => ({
-    servers: upsertServers(
-      state.servers,
-      servers.filter((x): x is Server => typeof x === "object" && x != null && "id" in x) as Server[],
+  set(() => ({
+    servers: (servers.filter((x): x is Server => typeof x === "object" && x != null && "id" in x) as Server[]).map(
+      withIconFallback,
     ),
     loaded: true,
     error: null,
