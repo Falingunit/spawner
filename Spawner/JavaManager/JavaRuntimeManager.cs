@@ -12,6 +12,8 @@ namespace Spawner.JavaManager
 {
 	public static class JavaRuntimeManager
 	{
+		private const string JavaRuntimesDirEnvVar = "SPAWNER_JAVA_RUNTIMES_DIR";
+
 		public static Dictionary<string, string> GetInstalledJavaVersions()
 		{
 			string javaInstancesLocation = GetJavaRuntimesLocation();
@@ -85,29 +87,31 @@ namespace Spawner.JavaManager
 			CancellationToken ct = default)
 		{
 			var installedJavaVersions = GetInstalledJavaVersions();
-			if (installedJavaVersions.ContainsKey(javaVersion)) return;
+			if (installedJavaVersions.TryGetValue(javaVersion, out var existingJavaPath))
+			{
+				if (!string.IsNullOrWhiteSpace(existingJavaPath) && File.Exists(existingJavaPath))
+					return;
+
+				installedJavaVersions.Remove(javaVersion);
+				UpdateInstalledJavaVersions(installedJavaVersions);
+			}
 
 			string os = GetAdoptiumOS();
 			string architecture = GetAdoptiumArchitecture();
 
-			string assetsUrl = $"https://api.adoptium.net/v3/assets/latest/{javaVersion}/hotspot?os={os}&architecture={architecture}&image_type=jre&vendor=eclipse";
+			string jreFinalDir = Path.Combine(GetJavaRuntimesLocation(), javaVersion);
+			var javaBinary = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "java.exe" : "java";
+			var javaBinaryPath = Path.Combine(jreFinalDir, "bin", javaBinary);
 
-			var assetsResult = await client.GetStringAsync(assetsUrl, ct);
-			JsonNode? assets = JsonNode.Parse(assetsResult);
+			var package = await GetLatestAdoptiumPackage(client, javaVersion, os, architecture, ct)
+				?? throw new Exception($"No usable Adoptium runtime found for Java version {javaVersion} on {os} {architecture}");
 
-			if (assets == null || assets.AsArray().Count == 0)
-				throw new Exception($"No assets found for Java version {javaVersion} on {os} {architecture}");
-
-			string downloadUrl = assets[0]?["binary"]?["package"]?["link"]?.ToString()
-				?? throw new Exception("Download link not found in assets.");
-			long jreSize = assets[0]?["binary"]?["package"]?["size"]?.GetValue<long>()
-				?? throw new Exception("JRE size not found in assets.");
-			string jreSha256 = assets[0]?["binary"]?["package"]?["checksum"]?.ToString()
-				?? throw new Exception("JRE SHA256 not found in assets.");
-			string jreFileName = assets[0]?["binary"]?["package"]?["name"]?.ToString() ?? $"jre-{javaVersion}.zip";
+			string downloadUrl = package.Link;
+			long jreSize = package.Size;
+			string jreSha256 = package.Checksum;
+			string jreFileName = package.Name;
 
 			string jreDownloadPath = Path.Combine(GetJavaRuntimesLocation(), "jreZipDownloads", javaVersion, jreFileName);
-			string jreFinalDir = Path.Combine(GetJavaRuntimesLocation(), javaVersion);
 
 			var progress = new Progress<(long received, long? total)>(p =>
 			{
@@ -125,13 +129,14 @@ namespace Spawner.JavaManager
 
 			await Download.DownloadFile(client, downloadUrl, jreDownloadPath, progress, jreSize, (HashAlgorithmName.SHA256, jreSha256), ct);
 			ExtractJre(jreDownloadPath, jreFinalDir);
+			if (!File.Exists(javaBinaryPath))
+				throw new FileNotFoundException($"Java runtime extracted, but the launcher was not found at '{javaBinaryPath}'.");
 
 			var downloadsDir = Path.Combine(GetJavaRuntimesLocation(), "jreZipDownloads", javaVersion);
 			if (Directory.Exists(downloadsDir))
 				Directory.Delete(downloadsDir, true);
 
-			var javaBinary = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "java.exe" : "java";
-			installedJavaVersions[javaVersion] = Path.Combine(jreFinalDir, "bin", javaBinary);
+			installedJavaVersions[javaVersion] = javaBinaryPath;
 			UpdateInstalledJavaVersions(installedJavaVersions);
 		}
 
@@ -206,11 +211,62 @@ namespace Spawner.JavaManager
 
 		public static string GetJavaRuntimesLocation()
 		{
+			var configured = (Environment.GetEnvironmentVariable(JavaRuntimesDirEnvVar) ?? "").Trim();
+			if (configured.Length > 0)
+			{
+				Directory.CreateDirectory(configured);
+				return configured;
+			}
+
 			string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+			if (string.IsNullOrWhiteSpace(appData))
+				appData = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+			if (string.IsNullOrWhiteSpace(appData))
+				appData = AppContext.BaseDirectory;
+
 			string javaInstancesLocation = Path.Combine(appData, "Spawner", "JavaRuntimes");
 			if (!Directory.Exists(javaInstancesLocation))
 				Directory.CreateDirectory(javaInstancesLocation);
 			return javaInstancesLocation;
+		}
+
+		private static async Task<AdoptiumPackage?> GetLatestAdoptiumPackage(
+			HttpClient client,
+			string javaVersion,
+			string os,
+			string architecture,
+			CancellationToken ct)
+		{
+			foreach (var imageType in new[] { "jre", "jdk" })
+			{
+				string assetsUrl = $"https://api.adoptium.net/v3/assets/latest/{javaVersion}/hotspot?os={os}&architecture={architecture}&image_type={imageType}&vendor=eclipse";
+
+				var assetsResult = await client.GetStringAsync(assetsUrl, ct);
+				JsonNode? assets = JsonNode.Parse(assetsResult);
+				var first = assets?.AsArray().FirstOrDefault();
+				if (first is null) continue;
+
+				var pkg = first["binary"]?["package"];
+				var link = pkg?["link"]?.ToString();
+				var checksum = pkg?["checksum"]?.ToString();
+				var size = pkg?["size"]?.GetValue<long>();
+				var name = pkg?["name"]?.ToString();
+				if (string.IsNullOrWhiteSpace(link) ||
+					string.IsNullOrWhiteSpace(checksum) ||
+					size is null ||
+					size.Value <= 0)
+				{
+					continue;
+				}
+
+				return new AdoptiumPackage(
+					link,
+					checksum,
+					size.Value,
+					string.IsNullOrWhiteSpace(name) ? $"java-{javaVersion}-{imageType}" : name);
+			}
+
+			return null;
 		}
 
 		private static void TryBackupCorruptJson(string path)
@@ -243,6 +299,8 @@ namespace Spawner.JavaManager
 				CopyDirectoryRecursive(sub, Path.Combine(dstDir, name));
 			}
 		}
+
+		private sealed record AdoptiumPackage(string Link, string Checksum, long Size, string Name);
 	}
 
 	public sealed record JavaDownloadProgress(
