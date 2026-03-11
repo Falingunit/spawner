@@ -27,6 +27,10 @@ function fmtBytes(n: number) {
   return `${v >= 10 || i === 0 ? v.toFixed(0) : v.toFixed(1)} ${units[i]}`;
 }
 
+function modrinthProjectUrl(project: Pick<ApiModrinthSearchHit, "slug" | "projectId">) {
+  return `https://modrinth.com/project/${encodeURIComponent(project.slug || project.projectId)}`;
+}
+
 export function DatapacksTab({
   serverId,
   serverVersion,
@@ -309,6 +313,7 @@ export function DatapacksTab({
                 const versions = versionsByProject[r.projectId] ?? [];
                 const loadingVersions = !!loadingVersionsByProject[r.projectId];
                 const installedForProject = itemsByProjectId.get(r.projectId) ?? [];
+                const projectUrl = modrinthProjectUrl(r);
                 const latestLoadedInstalled = versions.length > 0 && installedForProject.some((x) => x.versionId === versions[0]?.id);
                 const latestLabel = latestLoadedInstalled ? "Installed" : (installedForProject.length > 0 ? "Update" : "Install Content");
                 return (
@@ -317,7 +322,14 @@ export function DatapacksTab({
                       <div className="flex min-w-0 gap-3">
                         <img src={r.iconUrl || "/spawner.png"} alt="" className="h-10 w-10 rounded object-cover" onError={(e) => { e.currentTarget.src = "/spawner.png"; }} />
                         <div className="min-w-0">
-                          <div className="truncate font-medium">{r.title || r.slug || r.projectId}</div>
+                          <a
+                            href={projectUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="block truncate font-medium underline-offset-4 hover:underline"
+                          >
+                            {r.title || r.slug || r.projectId}
+                          </a>
                           {r.author ? <div className="text-xs text-muted-foreground">by {r.author}</div> : null}
                           <div className="line-clamp-2 text-xs text-muted-foreground">{r.description}</div>
                         </div>
