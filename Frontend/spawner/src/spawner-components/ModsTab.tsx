@@ -22,7 +22,22 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Search, Loader2, Download, Upload, RefreshCw, Trash2, ArrowUpCircle, Server, List, Plus, Repeat2 } from "lucide-react";
+import {
+  Search,
+  Loader2,
+  Download,
+  Upload,
+  RefreshCw,
+  Trash2,
+  ArrowUpCircle,
+  ArrowDownCircle,
+  Server,
+  List,
+  Plus,
+  Repeat2,
+  CheckCircle2,
+  XCircle,
+} from "lucide-react";
 
 function fmtBytes(n: number) {
   if (!Number.isFinite(n) || n <= 0) return "0 B";
@@ -35,6 +50,74 @@ function fmtBytes(n: number) {
 
 function modrinthProjectUrl(project: Pick<ApiModrinthSearchHit, "slug" | "projectId">) {
   return `https://modrinth.com/project/${encodeURIComponent(project.slug || project.projectId)}`;
+}
+
+function tokenizeVersion(value: string) {
+  return value
+    .split(/[^A-Za-z0-9]+/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => (/^\d+$/.test(part) ? Number(part) : part.toLowerCase()));
+}
+
+function compareLooseVersion(a: string, b: string) {
+  const aa = tokenizeVersion(a);
+  const bb = tokenizeVersion(b);
+  const len = Math.max(aa.length, bb.length);
+  for (let i = 0; i < len; i += 1) {
+    const left = aa[i];
+    const right = bb[i];
+    if (left === undefined) return -1;
+    if (right === undefined) return 1;
+    if (typeof left === "number" && typeof right === "number") {
+      if (left !== right) return left - right;
+      continue;
+    }
+    const cmp = String(left).localeCompare(String(right), undefined, { numeric: true, sensitivity: "base" });
+    if (cmp !== 0) return cmp;
+  }
+  return a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+}
+
+function isDowngrade(mod: ApiInstalledMod) {
+  const current = (mod.versionNumber || "").trim();
+  const next = (mod.update?.versionNumber || "").trim();
+  if (!current || !next) return false;
+  return compareLooseVersion(next, current) < 0;
+}
+
+function renderCompatibilityState(mod: ApiInstalledMod, serverVersion: string, showCompatible: boolean) {
+  const compatible = mod.compatibility?.isCompatible;
+  const checkedVersion = mod.compatibility?.gameVersion || serverVersion;
+  const downgrade = isDowngrade(mod);
+  if (compatible === true && showCompatible) {
+    return (
+      <div className="inline-flex items-center gap-1 text-xs text-muted-foreground" title={`Compatible with Minecraft ${checkedVersion}`}>
+        <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+        <span>Compatible</span>
+      </div>
+    );
+  }
+  if (compatible === false && mod.update?.available) {
+    return (
+      <div
+        className="inline-flex items-center gap-1 text-xs text-amber-700"
+        title={`Installed file is not compatible with Minecraft ${checkedVersion}, but a ${downgrade ? "downgrade" : "compatible update"} is available${mod.update.versionNumber ? ` (${mod.update.versionNumber})` : ""}.`}
+      >
+        {downgrade ? <ArrowDownCircle className="h-4 w-4" /> : <ArrowUpCircle className="h-4 w-4" />}
+        <span>{downgrade ? "Downgrade available" : "Update available"}</span>
+      </div>
+    );
+  }
+  if (compatible === false) {
+    return (
+      <div className="inline-flex items-center gap-1 text-xs text-destructive" title={`No compatible update found for Minecraft ${checkedVersion}.`}>
+        <XCircle className="h-4 w-4" />
+        <span>No update</span>
+      </div>
+    );
+  }
+  return null;
 }
 
 export function ModsTab({
@@ -94,11 +177,17 @@ export function ModsTab({
           versionId: next.versionId ?? null,
           versionNumber: next.versionNumber ?? null,
           isManual: next.isManual ?? !next.projectId,
+          compatibility: next.compatibility ?? { gameVersion: serverVersion, isCompatible: next.isManual ? null : true },
           update: next.update ?? { available: false },
         };
         return [created, ...prev];
       }
-      const merged = { ...prev[idx], ...next, update: next.update ? { ...prev[idx].update, ...next.update } : prev[idx].update };
+      const merged = {
+        ...prev[idx],
+        ...next,
+        compatibility: next.compatibility ? { ...prev[idx].compatibility, ...next.compatibility } : prev[idx].compatibility,
+        update: next.update ? { ...prev[idx].update, ...next.update } : prev[idx].update,
+      };
       const out = prev.slice();
       out[idx] = merged;
       return out;
@@ -125,7 +214,7 @@ export function ModsTab({
 
   React.useEffect(() => {
     void refreshMods();
-  }, [refreshMods]);
+  }, [refreshMods, serverVersion]);
 
   async function runFileAction(fileName: string, action: "enable" | "disable" | "remove" | "update") {
     if (busyByFile[fileName]) return;
@@ -147,20 +236,30 @@ export function ModsTab({
       if (action === "update") {
         const res = (await apiUpdateMod(serverId, fileName)) as {
           updated?: boolean;
-          fileName?: string;
-          enabled?: boolean;
-          versionId?: string;
-          versionNumber?: string;
-          projectId?: string;
+          installed?: {
+            fileName?: string;
+            enabled?: boolean;
+            versionId?: string;
+            versionNumber?: string;
+            projectId?: string;
+            projectSlug?: string | null;
+            displayName?: string | null;
+            iconUrl?: string | null;
+          };
         };
-        if (res?.updated && res.fileName) {
-          if (res.fileName !== fileName) removeLocalMod(fileName);
+        const installed = res?.installed;
+        if (res?.updated && installed?.fileName) {
+          if (installed.fileName !== fileName) removeLocalMod(fileName);
           upsertLocalMod({
-            fileName: res.fileName,
-            enabled: res.enabled ?? true,
-            versionId: res.versionId ?? null,
-            versionNumber: res.versionNumber ?? null,
-            projectId: res.projectId ?? null,
+            fileName: installed.fileName,
+            enabled: installed.enabled ?? true,
+            versionId: installed.versionId ?? null,
+            versionNumber: installed.versionNumber ?? null,
+            projectId: installed.projectId ?? null,
+            projectSlug: installed.projectSlug ?? null,
+            displayName: installed.displayName ?? installed.fileName,
+            iconUrl: installed.iconUrl ?? null,
+            compatibility: { gameVersion: serverVersion, isCompatible: true },
             update: { available: false },
           });
         }
@@ -218,9 +317,13 @@ export function ModsTab({
           fileName: installed.fileName,
           enabled: installed.enabled,
           projectId: installed.projectId,
+          projectSlug: installed.projectSlug ?? null,
           versionId: installed.versionId,
           versionNumber: installed.versionNumber,
+          displayName: installed.displayName ?? installed.fileName,
+          iconUrl: installed.iconUrl ?? null,
           isManual: false,
+          compatibility: { gameVersion: serverVersion, isCompatible: true },
           update: { available: false },
         });
       }
@@ -259,9 +362,13 @@ export function ModsTab({
           fileName: installed.fileName,
           enabled: installed.enabled,
           projectId: installed.projectId,
+          projectSlug: installed.projectSlug ?? null,
           versionId: installed.versionId,
           versionNumber: installed.versionNumber,
+          displayName: installed.displayName ?? installed.fileName,
+          iconUrl: installed.iconUrl ?? null,
           isManual: false,
+          compatibility: { gameVersion: serverVersion, isCompatible: true },
           update: { available: false },
         });
       }
@@ -292,6 +399,10 @@ export function ModsTab({
   const manualCount = mods.filter((m) => m.isManual).length;
   const updatableMods = mods.filter((m) => m.update?.available);
   const visibleMods = showDisabledOnly ? mods.filter((m) => !m.enabled) : mods;
+  const showCompatibleState = React.useMemo(
+    () => mods.filter((m) => m.enabled).some((m) => m.compatibility?.isCompatible !== true),
+    [mods],
+  );
 
   async function updateAllMods() {
     if (!offline) return;
@@ -394,18 +505,20 @@ export function ModsTab({
             <div className="grid gap-2">
               {visibleMods.map((m) => {
                 const busy = !!busyByFile[m.fileName];
+                const downgrade = isDowngrade(m);
                 return (
-                  <div key={`${m.enabled ? "on" : "off"}:${m.fileName}`} className="rounded-md border border-border bg-background/50 p-3">
+                  <div key={`${m.enabled ? "on" : "off"}:${m.fileName}`} className={`rounded-md border p-3 ${m.enabled ? "border-border bg-background/50" : "border-border bg-background/50 text-muted-foreground"}`}>
                     <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div className="flex min-w-0 items-center gap-3">
-                        <img src={m.iconUrl || "/spawner.png"} alt="" className="h-10 w-10 rounded object-cover" onError={(e) => { e.currentTarget.src = "/spawner.png"; }} />
+                      <div className={`flex min-w-0 items-center gap-3 ${m.enabled ? "" : "opacity-80"}`}>
+                        <img src={m.iconUrl || "/spawner.png"} alt="" className={`h-10 w-10 rounded object-cover ${m.enabled ? "" : "opacity-70 grayscale-[0.25]"}`} onError={(e) => { e.currentTarget.src = "/spawner.png"; }} />
                         <div className="min-w-0">
                           <div className="flex flex-wrap items-center gap-2">
-                            <div className="truncate font-medium">{m.displayName || m.fileName}</div>
+                            <div className={`truncate font-medium ${m.enabled ? "" : "text-foreground/75"}`}>{m.displayName || m.fileName}</div>
                             {m.isManual ? <Badge variant="secondary">Manual</Badge> : <Badge variant="outline">Modrinth</Badge>}
-                            {m.update?.available ? <Badge>Update {m.update.versionNumber || ""}</Badge> : null}
+                            {renderCompatibilityState(m, serverVersion, showCompatibleState)}
+                            {m.update?.available ? <Badge>{downgrade ? "Downgrade" : "Update"} {m.update.versionNumber || ""}</Badge> : null}
                           </div>
-                          <div className="truncate text-xs text-muted-foreground">
+                          <div className={`truncate text-xs ${m.enabled ? "text-muted-foreground" : "text-muted-foreground/80"}`}>
                             {m.fileName} • {fmtBytes(m.size)} {m.versionNumber ? `• ${m.versionNumber}` : ""}
                           </div>
                         </div>
@@ -413,8 +526,8 @@ export function ModsTab({
                       <div className="flex flex-wrap items-center gap-2">
                         {m.update?.available ? (
                           <Button size="sm" variant="secondary" disabled={!offline || busy} onClick={() => void runFileAction(m.fileName, "update")}>
-                            {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ArrowUpCircle className="mr-2 h-4 w-4" />}
-                            Update
+                            {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : downgrade ? <ArrowDownCircle className="mr-2 h-4 w-4" /> : <ArrowUpCircle className="mr-2 h-4 w-4" />}
+                            {downgrade ? "Downgrade" : "Update"}
                           </Button>
                         ) : null}
                         <div className="flex items-center gap-2 rounded-md border border-border px-2 py-1">

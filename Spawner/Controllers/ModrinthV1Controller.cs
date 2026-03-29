@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Spawner.Realtime;
 using Spawner.Services;
 using System.IO.Compression;
 using System.Security.Cryptography;
@@ -13,12 +14,14 @@ public sealed class ModrinthV1Controller : ControllerBase
 {
 	private readonly InstanceManager _manager;
 	private readonly ModrinthClient _modrinth;
+	private readonly EventBus? _bus;
 	private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web);
 
-	public ModrinthV1Controller(InstanceManager manager, ModrinthClient modrinth)
+	public ModrinthV1Controller(InstanceManager manager, ModrinthClient modrinth, EventBus? bus = null)
 	{
 		_manager = manager;
 		_modrinth = modrinth;
+		_bus = bus;
 	}
 
 	[HttpGet("modrinth/search")]
@@ -248,6 +251,7 @@ public sealed class ModrinthV1Controller : ControllerBase
 			return Conflict(new { error = new { code = "already_exists", message = "A file with that name already exists." } });
 
 		var tmp = dst + ".download";
+		PublishDownloadState(serverId, "content", safeName, "Downloading content");
 		try
 		{
 			if (System.IO.File.Exists(tmp)) System.IO.File.Delete(tmp);
@@ -258,8 +262,10 @@ public sealed class ModrinthV1Controller : ControllerBase
 		catch (Exception ex)
 		{
 			try { if (System.IO.File.Exists(tmp)) System.IO.File.Delete(tmp); } catch { }
+			PublishDownloadError(serverId, "content", safeName, ex.Message);
 			return StatusCode(409, new { error = new { code = "install_failed", message = ex.Message } });
 		}
+		PublishDownloadReady(serverId);
 
 		return Ok(new { installed = new { kind = contentKind.ToString().ToLowerInvariant(), fileName = safeName }, serverTime = DateTime.UtcNow.ToString("O") });
 	}
@@ -315,9 +321,14 @@ public sealed class ModrinthV1Controller : ControllerBase
 		if (file is null)
 			return BadRequest(new { error = new { code = "no_installable_file", message = "No installable .jar file found for that version." } });
 
+		PublishDownloadState(serverId, "mods", Path.GetFileName(file.Filename ?? "") ?? "mod.jar", "Downloading mod");
 		var result = await InstallVersionFileIntoModsAsync(props, version, file, overwriteExisting: false, ct);
 		if (!result.Success)
+		{
+			PublishDownloadError(serverId, "mods", Path.GetFileName(file.Filename ?? "") ?? "mod.jar", result.Message);
 			return StatusCode(result.StatusCode, new { error = new { code = result.Code, message = result.Message } });
+		}
+		PublishDownloadReady(serverId);
 
 		return Ok(new { installed = result.Payload, serverTime = DateTime.UtcNow.ToString("O") });
 	}
@@ -390,6 +401,7 @@ public sealed class ModrinthV1Controller : ControllerBase
 
 		var dst = Path.Combine(targetDir, nextName);
 		var tmp = dst + ".download";
+		PublishDownloadState(serverId, "mods", nextName, "Downloading mod update");
 		try
 		{
 			if (System.IO.File.Exists(tmp)) System.IO.File.Delete(tmp);
@@ -404,17 +416,16 @@ public sealed class ModrinthV1Controller : ControllerBase
 		catch (Exception ex)
 		{
 			try { if (System.IO.File.Exists(tmp)) System.IO.File.Delete(tmp); } catch { }
+			PublishDownloadError(serverId, "mods", nextName, ex.Message);
 			return StatusCode(409, new { error = new { code = "update_failed", message = ex.Message } });
 		}
+		PublishDownloadReady(serverId);
 
+		var payload = await BuildInstalledModPayloadAsync(nextVersion, nextName, enabled, removedFileNames: null, ct);
 		return Ok(new
 		{
 			updated = true,
-			fileName = nextName,
-			enabled,
-			versionId = nextVersion.Id,
-			projectId = nextVersion.ProjectId,
-			versionNumber = nextVersion.VersionNumber ?? "",
+			installed = payload,
 			serverTime = DateTime.UtcNow.ToString("O")
 		});
 	}
@@ -435,11 +446,14 @@ public sealed class ModrinthV1Controller : ControllerBase
 		{
 			await using (var fs = new FileStream(tmpPath, FileMode.Create, FileAccess.Write, FileShare.None))
 				await file.CopyToAsync(fs, ct);
+			PublishDownloadState(serverId, "mods", file.FileName, "Importing modpack");
 			var result = await ImportMrpackInternalAsync(props, tmpPath, ct);
+			PublishDownloadReady(serverId);
 			return Ok(new { imported = result, serverTime = DateTime.UtcNow.ToString("O") });
 		}
 		catch (Exception ex)
 		{
+			PublishDownloadError(serverId, "mods", file.FileName, ex.Message);
 			return StatusCode(409, new { error = new { code = "mrpack_import_failed", message = ex.Message } });
 		}
 		finally
@@ -505,6 +519,8 @@ public sealed class ModrinthV1Controller : ControllerBase
 		public string? ProjectSlug { get; set; }
 		public string? VersionId { get; set; }
 		public string? VersionNumber { get; set; }
+		public string? CheckedGameVersion { get; set; }
+		public bool? IsGameVersionCompatible { get; set; }
 		public bool UpdateAvailable { get; set; }
 		public string? UpdateVersionId { get; set; }
 		public string? UpdateVersionNumber { get; set; }
@@ -525,6 +541,7 @@ public sealed class ModrinthV1Controller : ControllerBase
 		versionId = x.VersionId,
 		versionNumber = x.VersionNumber,
 		isManual = x.IsManual,
+		compatibility = new { gameVersion = x.CheckedGameVersion, isCompatible = x.IsGameVersionCompatible },
 		update = new { available = x.UpdateAvailable, versionId = x.UpdateVersionId, versionNumber = x.UpdateVersionNumber }
 	};
 
@@ -550,6 +567,7 @@ public sealed class ModrinthV1Controller : ControllerBase
 	private async Task EnrichModListWithModrinthAsync(List<InstalledModFileDto> items, InstanceProperties props, CancellationToken ct)
 	{
 		if (items.Count == 0) return;
+		foreach (var item in items) item.CheckedGameVersion = string.IsNullOrWhiteSpace(props.GameVersion) ? null : props.GameVersion;
 		foreach (var item in items) item.Sha1 = await ComputeHashHexAsync(item.FullPath, SHA1.Create(), ct);
 
 		var hashes = items.Select(x => x.Sha1!).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
@@ -573,6 +591,7 @@ public sealed class ModrinthV1Controller : ControllerBase
 			item.ProjectId = version.ProjectId;
 			item.VersionId = version.Id;
 			item.VersionNumber = version.VersionNumber ?? "";
+			item.IsGameVersionCompatible = IsInstalledModCompatibleWithGameVersion(version, props);
 			if (projects.TryGetValue(version.ProjectId, out var project))
 			{
 				item.ProjectSlug = project.Slug;
@@ -586,6 +605,14 @@ public sealed class ModrinthV1Controller : ControllerBase
 				item.UpdateVersionNumber = next.VersionNumber ?? "";
 			}
 		}
+	}
+
+	private static bool IsInstalledModCompatibleWithGameVersion(ModrinthVersion version, InstanceProperties props)
+	{
+		if (!string.IsNullOrWhiteSpace(props.GameVersion) && (version.GameVersions?.Count ?? 0) > 0 &&
+			!(version.GameVersions ?? new()).Any(x => string.Equals(x, props.GameVersion, StringComparison.OrdinalIgnoreCase)))
+			return false;
+		return true;
 	}
 
 	private enum ContentKind
@@ -771,7 +798,27 @@ public sealed class ModrinthV1Controller : ControllerBase
 			try { if (System.IO.File.Exists(tmp)) System.IO.File.Delete(tmp); } catch { }
 			return new(false, 409, "install_failed", ex.Message, null);
 		}
-		return new(true, 200, "", "", new { fileName = safeName, enabled = true, versionId = version.Id, projectId = version.ProjectId, versionNumber = version.VersionNumber ?? "", removedFileNames });
+		var payload = await BuildInstalledModPayloadAsync(version, safeName, enabled: true, removedFileNames, ct);
+		return new(true, 200, "", "", payload);
+	}
+
+	private async Task<object> BuildInstalledModPayloadAsync(ModrinthVersion version, string fileName, bool enabled, List<string>? removedFileNames, CancellationToken ct)
+	{
+		ModrinthProject? project = null;
+		try { project = await _modrinth.GetProjectAsync(version.ProjectId, ct); } catch { }
+
+		return new
+		{
+			fileName,
+			enabled,
+			versionId = version.Id,
+			projectId = version.ProjectId,
+			projectSlug = project?.Slug,
+			versionNumber = version.VersionNumber ?? "",
+			displayName = project?.Title ?? fileName,
+			iconUrl = project?.IconUrl,
+			removedFileNames = removedFileNames ?? new List<string>()
+		};
 	}
 
 	private async Task<List<string>> RemoveExistingProjectModFilesAsync(InstanceProperties props, string projectId, CancellationToken ct)
@@ -1043,6 +1090,41 @@ public sealed class ModrinthV1Controller : ControllerBase
 		var hash = await algo.ComputeHashAsync(fs, ct);
 		algo.Dispose();
 		return Convert.ToHexString(hash).ToLowerInvariant();
+	}
+
+	private void PublishDownloadState(string serverId, string stage, string? fileName, string message)
+	{
+		var status = new InstanceInitStatus(
+			state: "downloading",
+			stage: stage,
+			fileName: fileName,
+			bytesReceived: 0,
+			totalBytes: null,
+			percent: null,
+			message: message);
+		_manager.SetInitStatus(serverId, status);
+		_bus?.Publish(Topics.Servers, new { kind = "server.patch", serverId, patch = new { init = status, status = "downloading" } });
+	}
+
+	private void PublishDownloadReady(string serverId)
+	{
+		_manager.ClearInitStatus(serverId);
+		var ready = _manager.GetInitStatus(serverId);
+		_bus?.Publish(Topics.Servers, new { kind = "server.patch", serverId, patch = new { init = ready, status = "offline" } });
+	}
+
+	private void PublishDownloadError(string serverId, string stage, string? fileName, string message)
+	{
+		var err = new InstanceInitStatus(
+			state: "error",
+			stage: stage,
+			fileName: fileName,
+			bytesReceived: 0,
+			totalBytes: null,
+			percent: null,
+			message: message);
+		_manager.SetInitStatus(serverId, err);
+		_bus?.Publish(Topics.Servers, new { kind = "server.patch", serverId, patch = new { init = err, status = "offline" } });
 	}
 
 	private bool TryGetInstanceProps(string serverId, out InstanceProperties props, out IActionResult? error)

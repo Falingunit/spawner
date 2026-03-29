@@ -16,7 +16,21 @@ import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 import { RefreshCw, Search, Loader2, Save, Settings, ServerCog, ListChecks, SquareTerminal, Logs, Folder, Upload, Pencil, Check, X, Boxes, RotateCw } from "lucide-react";
-import { apiGetLogFileTail, apiListLogFiles, apiListInstanceTypes, apiResolvePlayer, apiSetInstanceType, apiRenameInstance, type ApiInstanceType, type ApiLogFile } from "@/lib/api";
+import {
+  apiGetLogFileTail,
+  apiListLogFiles,
+  apiListInstanceTypes,
+  apiListMinecraftVersions,
+  apiListFabricGameVersions,
+  apiResolvePlayer,
+  apiSetGameVersion,
+  apiSetInstanceType,
+  apiRenameInstance,
+  type ApiFabricGameVersion,
+  type ApiInstanceType,
+  type ApiLogFile,
+  type ApiMinecraftVersion,
+} from "@/lib/api";
 import type { LaunchSettings } from "@/lib/api";
 import { Trash2 } from "lucide-react";
 import { apiBaseUrlForBrowser } from "@/spawner-components/fileApiHelpers";
@@ -59,6 +73,10 @@ function toBool(v: unknown) {
   if (typeof v === "string") return v.trim().toLowerCase() === "true";
   if (typeof v === "number") return v !== 0;
   return false;
+}
+
+function sameText(a: string, b: string) {
+  return a.trim() === b.trim();
 }
 
 type IconCropRect = { x: number; y: number; size: number };
@@ -225,6 +243,10 @@ export default function ServerPage() {
   const [iconCrop, setIconCrop] = React.useState<IconCropRect>({ x: 0, y: 0, size: 64 });
 
   const [instanceTypes, setInstanceTypes] = React.useState<ApiInstanceType[]>([]);
+  const [minecraftVersions, setMinecraftVersions] = React.useState<ApiMinecraftVersion[]>([]);
+  const [fabricGameVersions, setFabricGameVersions] = React.useState<ApiFabricGameVersion[]>([]);
+  const [gameVersionValue, setGameVersionValue] = React.useState("");
+  const [versionMetaLoading, setVersionMetaLoading] = React.useState(false);
   const [instanceTypeSaving, setInstanceTypeSaving] = React.useState(false);
   const [instanceTypeError, setInstanceTypeError] = React.useState<string | null>(null);
 
@@ -330,6 +352,35 @@ export default function ServerPage() {
   }, [activeTab, instanceTypes.length, launchLoading, loadLaunchSettings, serverId, storedLaunch]);
 
   React.useEffect(() => {
+    if (!serverId || activeTab !== "launch") return;
+    const needMinecraft = minecraftVersions.length === 0;
+    const needFabric = server?.type === "fabric" && fabricGameVersions.length === 0;
+    if (!needMinecraft && !needFabric) return;
+
+    let cancelled = false;
+    setVersionMetaLoading(true);
+    void (async () => {
+      try {
+        const [minecraftResp, fabricResp] = await Promise.all([
+          needMinecraft ? apiListMinecraftVersions() : Promise.resolve(null),
+          needFabric ? apiListFabricGameVersions() : Promise.resolve(null),
+        ]);
+        if (cancelled) return;
+        if (minecraftResp?.versions) setMinecraftVersions(minecraftResp.versions);
+        if (fabricResp) setFabricGameVersions(fabricResp);
+      } catch {
+        // ignore; manual current value remains available
+      } finally {
+        if (!cancelled) setVersionMetaLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, fabricGameVersions.length, minecraftVersions.length, server?.type, serverId]);
+
+  React.useEffect(() => {
     if (!serverId || activeTab !== "console") return;
     if (!consoleLoaded && !consoleLoading) {
       void loadConsole(serverId);
@@ -402,6 +453,39 @@ export default function ServerPage() {
     if (!storedLaunch) return;
     setLaunch(storedLaunch.settings);
   }, [storedLaunch]);
+
+  React.useEffect(() => {
+    setGameVersionValue(server?.version || "");
+  }, [server?.version, serverId]);
+
+  const gameVersionOptions = React.useMemo(() => {
+    const raw =
+      server?.type === "fabric"
+        ? fabricGameVersions.map((v) => ({ value: v.version, meta: v.stable ? "Stable" : "Snapshot" }))
+        : minecraftVersions.map((v) => ({ value: v.id, meta: v.type === "snapshot" ? "Snapshot" : "Release" }));
+
+    const seen = new Set<string>();
+    const options: Array<{ value: string; meta: string }> = [];
+    for (const item of raw) {
+      const value = item.value.trim();
+      if (!value || seen.has(value)) continue;
+      seen.add(value);
+      options.push({ value, meta: item.meta });
+    }
+
+    const current = (server?.version || "").trim();
+    if (current && !seen.has(current)) {
+      seen.add(current);
+      options.unshift({ value: current, meta: "Current" });
+    }
+
+    const selected = gameVersionValue.trim();
+    if (selected && !seen.has(selected)) {
+      options.unshift({ value: selected, meta: "Selected" });
+    }
+
+    return options;
+  }, [fabricGameVersions, gameVersionValue, minecraftVersions, server?.type, server?.version]);
 
   React.useEffect(() => {
     if (!iconFile) {
@@ -688,9 +772,24 @@ export default function ServerPage() {
     setLaunchSaving(true);
     setLaunchError(null);
     try {
-      await saveLaunchSettingsAction(serverId, launch);
-      const next = useServerStore.getState().launchById[serverId];
-      if (next) setLaunch(next.settings);
+      const launchChanged =
+        !!storedLaunch &&
+        (!sameText(launch.javaPath, storedLaunch.settings.javaPath) ||
+          launch.javaArgs !== storedLaunch.settings.javaArgs ||
+          !sameText(launch.serverJarName, storedLaunch.settings.serverJarName));
+      const versionChanged = !sameText(gameVersionValue, server?.version || "");
+
+      if (launchChanged) {
+        await saveLaunchSettingsAction(serverId, launch);
+        const next = useServerStore.getState().launchById[serverId];
+        if (next) setLaunch(next.settings);
+      }
+
+      if (versionChanged) {
+        const savedVersion = await apiSetGameVersion(serverId, gameVersionValue.trim());
+        useServerStore.getState().updateServer(serverId, { version: savedVersion });
+        setGameVersionValue(savedVersion);
+      }
     } catch (e) {
       setLaunchError(e instanceof Error ? e.message : "Failed to save launch settings");
     } finally {
@@ -1338,6 +1437,32 @@ export default function ServerPage() {
 	                      <span className="font-mono">{instanceTypeError}</span>
 	                    </div>
 	                  ) : null}
+	                </div>
+
+	                <div className="grid gap-2">
+	                  <div className="flex flex-wrap items-center justify-between gap-2">
+	                    <div className="text-sm font-medium">Minecraft Version</div>
+	                    {versionMetaLoading ? <div className="text-xs text-muted-foreground">Loading versions...</div> : null}
+	                  </div>
+	                  <Select
+	                    value={gameVersionValue}
+	                    onValueChange={setGameVersionValue}
+	                    disabled={launchSaving || server.status !== "offline" || gameVersionOptions.length === 0}
+	                  >
+	                    <SelectTrigger>
+	                      <SelectValue placeholder="Select Minecraft version" />
+	                    </SelectTrigger>
+	                    <SelectContent>
+	                      {gameVersionOptions.map((item) => (
+	                        <SelectItem key={item.value} value={item.value}>
+	                          {item.value} {item.meta ? `(${item.meta})` : ""}
+	                        </SelectItem>
+	                      ))}
+	                    </SelectContent>
+	                  </Select>
+	                  <div className="text-xs text-muted-foreground">
+	                    Updates Spawner&apos;s saved game version and replaces the matching server jar for Vanilla and Fabric instances.
+	                  </div>
 	                </div>
 
 	                <div className="grid gap-2">

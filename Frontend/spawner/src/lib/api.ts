@@ -369,6 +369,16 @@ export async function apiRenameInstance(serverId: string, name: string) {
   return data.name;
 }
 
+export async function apiSetGameVersion(serverId: string, version: string) {
+  const res = await apiFetch(`/api/v1/servers/${encodeURIComponent(serverId)}:set-version`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ version }),
+  });
+  const data = await readJson<{ version: string }>(res);
+  return data.version;
+}
+
 export async function apiDetectMinecraftVersionFromJarPath(serverJarPath: string) {
   const res = await apiFetch(`/api/v1/minecraft:detect-version`, {
     method: "POST",
@@ -459,6 +469,10 @@ export type ApiInstalledMod = {
   versionId?: string | null;
   versionNumber?: string | null;
   isManual: boolean;
+  compatibility: {
+    gameVersion?: string | null;
+    isCompatible?: boolean | null;
+  };
   update: {
     available: boolean;
     versionId?: string | null;
@@ -477,7 +491,19 @@ export async function apiInstallModrinthVersion(serverId: string, versionId: str
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ versionId }),
   });
-  return readJson<{ installed: { fileName: string; enabled: boolean; versionId: string; projectId: string; versionNumber: string; removedFileNames?: string[] } }>(res);
+  return readJson<{
+    installed: {
+      fileName: string;
+      enabled: boolean;
+      versionId: string;
+      projectId: string;
+      projectSlug?: string | null;
+      versionNumber: string;
+      displayName?: string | null;
+      iconUrl?: string | null;
+      removedFileNames?: string[];
+    };
+  }>(res);
 }
 
 async function apiModsFileAction(serverId: string, action: "enable" | "disable" | "remove" | "update", fileName: string) {

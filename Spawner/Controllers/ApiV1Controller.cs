@@ -310,25 +310,8 @@ namespace Spawner.Controllers;
 
 		private static async Task<string> EnsureJavaForMinecraftVersionAsync(string versionInfoUrl, CancellationToken ct)
 		{
-			if (string.IsNullOrWhiteSpace(versionInfoUrl))
-				throw new InvalidOperationException("Missing version info URL.");
-
 			using var client = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
-			var versionJson = await client.GetStringAsync(versionInfoUrl, ct);
-			var node = JsonNode.Parse(versionJson);
-
-			var majorNode = node?["javaVersion"]?["majorVersion"];
-			var majorStr = majorNode?.ToString()?.Trim();
-			if (string.IsNullOrWhiteSpace(majorStr))
-				throw new InvalidOperationException("Failed to determine required Java version.");
-
-			await JavaRuntimeManager.InstallNewJavaVersion(client, majorStr, onProgress: null, ct);
-
-			var javaPath = JavaRuntimeManager.GetInstalledJavaVersions().GetValueOrDefault(majorStr);
-			if (string.IsNullOrWhiteSpace(javaPath))
-				throw new InvalidOperationException("Failed to locate installed Java runtime.");
-
-			return javaPath;
+			return await EnsureJavaForMinecraftVersionAsync(versionInfoUrl, client, ct);
 		}
 
 		private static bool TryDetectVersionFromJarPath(string jarFull, out string version, out List<string> candidates)
@@ -402,6 +385,7 @@ namespace Spawner.Controllers;
 
 		public sealed record SetInstanceTypeReq([property: JsonPropertyName("type")] string? Type);
 		public sealed record RenameInstanceReq([property: JsonPropertyName("name")] string? Name);
+		public sealed record SetGameVersionReq([property: JsonPropertyName("version")] string? Version);
 
 		[HttpPost("servers/{serverId}:rename")]
 		public IActionResult RenameInstance([FromRoute] string serverId, [FromBody] RenameInstanceReq body)
@@ -447,6 +431,77 @@ namespace Spawner.Controllers;
 			_bus?.Publish(Topics.Servers, new { kind = "snapshot", servers = BuildServerDtos() });
 
 			return Ok(new { type = instanceType.ToString().ToLowerInvariant(), serverTime = DateTime.UtcNow.ToString("O") });
+		}
+
+		[HttpPost("servers/{serverId}:set-version")]
+		public async Task<IActionResult> SetGameVersion([FromRoute] string serverId, [FromBody] SetGameVersionReq body, CancellationToken ct)
+		{
+			var version = (body?.Version ?? "").Trim();
+			if (version.Length == 0)
+				return BadRequest(new { error = new { code = "bad_request", message = "Version is required" } });
+
+			Spawner.InstanceProperties props;
+			try { props = _manager.GetInstanceProperties(serverId); }
+			catch { return NotFound(new { error = new { code = "not_found", message = "Server not found" } }); }
+
+			if (_manager.IsInstanceRunning(serverId))
+			{
+				return StatusCode(409, new
+				{
+					error = new { code = "server_running", message = "Stop the server before changing the game version." }
+				});
+			}
+
+			PublishDownloadState(serverId, new Spawner.InstanceInitStatus(
+				state: "downloading",
+				stage: "server",
+				fileName: props.ServerJarName ?? "server.jar",
+				bytesReceived: 0,
+				totalBytes: null,
+				percent: null,
+				message: "Changing server version"));
+
+			MojangVersionManifest manifest;
+			try { manifest = await GetMojangVersionManifest(ct); }
+			catch (Exception ex)
+			{
+				PublishDownloadError(serverId, "server", props.ServerJarName ?? "server.jar", ex.Message);
+				return StatusCode(502, new { error = new { code = "minecraft_versions_unavailable", message = ex.Message } });
+			}
+
+			var versionInfo = manifest.Versions.FirstOrDefault(v => string.Equals(v.Id, version, StringComparison.OrdinalIgnoreCase));
+			if (versionInfo is null)
+			{
+				PublishDownloadReady(serverId);
+				return BadRequest(new { error = new { code = "bad_request", message = "Unknown Minecraft version" } });
+			}
+
+			ServerJarUpgradePlan plan;
+			try { plan = await BuildServerJarUpgradePlanAsync(props, versionInfo, ct); }
+			catch (Exception ex)
+			{
+				PublishDownloadError(serverId, "server", props.ServerJarName ?? "server.jar", ex.Message);
+				return StatusCode(409, new { error = new { code = "version_change_failed", message = ex.Message } });
+			}
+
+			try { await ReplaceServerJarAsync(props, plan, ct); }
+			catch (Exception ex)
+			{
+				PublishDownloadError(serverId, "server", props.ServerJarName ?? "server.jar", ex.Message);
+				return StatusCode(409, new { error = new { code = "jar_replace_failed", message = ex.Message } });
+			}
+
+			props.GameVersion = version;
+			props.JavaPath = plan.JavaPath;
+			if (!string.IsNullOrWhiteSpace(plan.FabricLoaderVersion))
+				props.FabricLoaderVersion = plan.FabricLoaderVersion;
+			_manager.PersistInstanceProperties();
+			PublishDownloadReady(serverId);
+
+			_bus?.Publish(Topics.Servers, new { kind = "server.patch", serverId, patch = new { version } });
+			_bus?.Publish(Topics.Servers, new { kind = "snapshot", servers = BuildServerDtos() });
+
+			return Ok(new { version, serverTime = DateTime.UtcNow.ToString("O") });
 		}
 
 	public sealed record MojangVersionLatest(
@@ -1523,5 +1578,174 @@ namespace Spawner.Controllers;
 		}
 
 		return versions;
+	}
+
+	private sealed record ServerJarUpgradePlan(
+		string DownloadUrl,
+		long? DownloadSize,
+		(HashAlgorithmName algo, string expectedHex)? ExpectedHash,
+		string JavaPath,
+		string? FabricLoaderVersion
+	);
+
+	private static async Task<string> EnsureJavaForMinecraftVersionAsync(string versionInfoUrl, HttpClient client, CancellationToken ct)
+	{
+		if (string.IsNullOrWhiteSpace(versionInfoUrl))
+			throw new InvalidOperationException("Missing version info URL.");
+
+		var versionJson = await client.GetStringAsync(versionInfoUrl, ct);
+		var node = JsonNode.Parse(versionJson);
+
+		var majorNode = node?["javaVersion"]?["majorVersion"];
+		var majorStr = majorNode?.ToString()?.Trim();
+		if (string.IsNullOrWhiteSpace(majorStr))
+			throw new InvalidOperationException("Failed to determine required Java version.");
+
+		await JavaRuntimeManager.InstallNewJavaVersion(client, majorStr, onProgress: null, ct);
+
+		var javaPath = JavaRuntimeManager.GetInstalledJavaVersions().GetValueOrDefault(majorStr);
+		if (string.IsNullOrWhiteSpace(javaPath))
+			throw new InvalidOperationException("Failed to locate installed Java runtime.");
+
+		return javaPath;
+	}
+
+	private static async Task<ServerJarUpgradePlan> BuildServerJarUpgradePlanAsync(Spawner.InstanceProperties props, MojangVersionInfo versionInfo, CancellationToken ct)
+	{
+		if (props.InstanceType == Spawner.InstanceType.Custom)
+			throw new InvalidOperationException("Automatic server-jar replacement is only supported for Vanilla and Fabric instances.");
+
+		using var client = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+		var javaPath = await EnsureJavaForMinecraftVersionAsync(versionInfo.Url, client, ct);
+
+		if (props.InstanceType == Spawner.InstanceType.Vanilla)
+		{
+			var versionJson = await client.GetStringAsync(versionInfo.Url, ct);
+			var node = JsonNode.Parse(versionJson);
+			var downloadUrl = node?["downloads"]?["server"]?["url"]?.ToString()?.Trim();
+			var sha1 = node?["downloads"]?["server"]?["sha1"]?.ToString()?.Trim();
+			var size = node?["downloads"]?["server"]?["size"]?.GetValue<long>();
+			if (string.IsNullOrWhiteSpace(downloadUrl))
+				throw new InvalidOperationException("Selected version does not expose a downloadable server jar.");
+
+			return new ServerJarUpgradePlan(
+				downloadUrl,
+				size,
+				string.IsNullOrWhiteSpace(sha1) ? null : (HashAlgorithmName.SHA1, sha1),
+				javaPath,
+				null);
+		}
+
+		if (props.InstanceType == Spawner.InstanceType.Fabric)
+		{
+			var loaders = await GetFabricLoaderVersions(versionInfo.Id, ct);
+			if (loaders.Count == 0)
+				throw new InvalidOperationException("No Fabric loader versions are available for the selected Minecraft version.");
+
+			var nextLoader = SelectPreferredFabricLoaderVersion(loaders, props.FabricLoaderVersion);
+			var installerJson = await client.GetStringAsync("https://meta.fabricmc.net/v2/versions/installer", ct);
+			var installerManifest = (JsonArray?)JsonNode.Parse(installerJson) ?? new JsonArray();
+			var latestInstaller = installerManifest
+				.Select(x => x?["version"]?.ToString()?.Trim())
+				.Where(x => !string.IsNullOrWhiteSpace(x))
+				.Select(x => x!)
+				.OrderByDescending(x => Version.TryParse(x, out var parsed) ? parsed : new Version(0, 0))
+				.FirstOrDefault();
+
+			if (string.IsNullOrWhiteSpace(latestInstaller))
+				throw new InvalidOperationException("Failed to determine a Fabric installer version.");
+
+			return new ServerJarUpgradePlan(
+				$"https://meta.fabricmc.net/v2/versions/loader/{Uri.EscapeDataString(versionInfo.Id)}/{Uri.EscapeDataString(nextLoader)}/{Uri.EscapeDataString(latestInstaller)}/server/jar",
+				null,
+				null,
+				javaPath,
+				nextLoader);
+		}
+
+		throw new InvalidOperationException("Unsupported instance type.");
+	}
+
+	private static string SelectPreferredFabricLoaderVersion(HashSet<string> loaders, string? preferred)
+	{
+		if (!string.IsNullOrWhiteSpace(preferred) && loaders.Contains(preferred))
+			return preferred;
+
+		var next = loaders
+			.OrderByDescending(x => Version.TryParse(x, out var parsed) ? parsed : new Version(0, 0))
+			.ThenByDescending(x => x, StringComparer.OrdinalIgnoreCase)
+			.FirstOrDefault();
+
+		if (string.IsNullOrWhiteSpace(next))
+			throw new InvalidOperationException("No compatible Fabric loader version is available.");
+
+		return next;
+	}
+
+	private static async Task ReplaceServerJarAsync(Spawner.InstanceProperties props, ServerJarUpgradePlan plan, CancellationToken ct)
+	{
+		var instanceDir = (props.InstanceDirectory ?? "").Trim();
+		if (instanceDir.Length == 0)
+			throw new InvalidOperationException("Instance directory is not configured.");
+
+		var serverJarName = (props.ServerJarName ?? "").Trim();
+		if (serverJarName.Length == 0)
+			serverJarName = "server.jar";
+		if (Path.IsPathRooted(serverJarName))
+			throw new InvalidOperationException("Server jar path must be relative to the instance directory.");
+
+		var destinationPath = Path.Combine(instanceDir, serverJarName.Replace('/', Path.DirectorySeparatorChar));
+		var tmpPath = destinationPath + ".download";
+
+		Directory.CreateDirectory(Path.GetDirectoryName(destinationPath) ?? instanceDir);
+
+		using var client = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+		try
+		{
+			if (System.IO.File.Exists(tmpPath))
+				System.IO.File.Delete(tmpPath);
+
+			await Download.DownloadFile(client, plan.DownloadUrl, tmpPath, totalBytes: plan.DownloadSize, expectedHash: plan.ExpectedHash, ct: ct);
+			System.IO.File.Move(tmpPath, destinationPath, overwrite: true);
+		}
+		finally
+		{
+			try
+			{
+				if (System.IO.File.Exists(tmpPath))
+					System.IO.File.Delete(tmpPath);
+			}
+			catch
+			{
+				// best-effort cleanup
+			}
+		}
+	}
+
+	private void PublishDownloadState(string serverId, Spawner.InstanceInitStatus status)
+	{
+		_manager.SetInitStatus(serverId, status);
+		_bus?.Publish(Topics.Servers, new { kind = "server.patch", serverId, patch = new { init = status, status = "downloading" } });
+	}
+
+	private void PublishDownloadReady(string serverId)
+	{
+		_manager.ClearInitStatus(serverId);
+		var ready = _manager.GetInitStatus(serverId);
+		_bus?.Publish(Topics.Servers, new { kind = "server.patch", serverId, patch = new { init = ready, status = "offline" } });
+	}
+
+	private void PublishDownloadError(string serverId, string stage, string? fileName, string message)
+	{
+		var err = new Spawner.InstanceInitStatus(
+			state: "error",
+			stage: stage,
+			fileName: fileName,
+			bytesReceived: 0,
+			totalBytes: null,
+			percent: null,
+			message: message);
+		_manager.SetInitStatus(serverId, err);
+		_bus?.Publish(Topics.Servers, new { kind = "server.patch", serverId, patch = new { init = err, status = "offline" } });
 	}
 }
