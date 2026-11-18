@@ -335,7 +335,6 @@ export function ModsTab({
   }
 
   async function installLatestForProject(project: ApiModrinthSearchHit) {
-    if (!offline) return;
     if (installingLatestProjectId === project.projectId) return;
     setInstallingLatestProjectId(project.projectId);
     setSearchError(null);
@@ -460,7 +459,7 @@ export function ModsTab({
           </div>
         </div>
         {!offline ? (
-          <div className="rounded-md border border-border bg-muted/30 p-3 text-sm">Stop the server to install, update, remove, or toggle mods.</div>
+          <div className="rounded-md border border-border bg-muted/30 p-3 text-sm">You can install mods while the server is running. Restart the server to load newly installed mods. Stop the server before updating, removing, or toggling mods.</div>
         ) : null}
         {error ? <div className="rounded-md border border-border bg-muted/30 p-3 text-sm"><span className="font-mono">{error}</span></div> : null}
         {modrinthError ? <div className="rounded-md border border-border bg-muted/20 p-3 text-xs text-muted-foreground">Modrinth metadata unavailable: {modrinthError}</div> : null}
@@ -632,7 +631,7 @@ export function ModsTab({
                           {loadingVersions ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <List className="mr-2 h-4 w-4" />}
                           Versions
                         </Button>
-                        <Button size="sm" onClick={() => void installLatestForProject(r)} disabled={!offline || installingLatestProjectId === r.projectId || exactLatestInstalled}>
+                        <Button size="sm" onClick={() => void installLatestForProject(r)} disabled={installingLatestProjectId === r.projectId || exactLatestInstalled}>
                           {installingLatestProjectId === r.projectId ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                           {!installingLatestProjectId && (latestBtnLabel === "Update" ? <ArrowUpCircle className="mr-2 h-4 w-4" /> : latestBtnLabel === "Install" ? <Plus className="mr-2 h-4 w-4" /> : null)}
                           {latestBtnLabel}
@@ -650,7 +649,7 @@ export function ModsTab({
                               <div className="truncate">{v.name || v.versionNumber}</div>
                               <div className="text-xs text-muted-foreground">{v.versionNumber} • {v.versionType || "release"}</div>
                             </div>
-                            <Button size="sm" variant={exactInstalled ? "secondary" : "default"} disabled={!offline || installingVersionId === v.id || exactInstalled} onClick={() => void installVersion(v.id)}>
+                            <Button size="sm" variant={exactInstalled ? "secondary" : "default"} disabled={installingVersionId === v.id || exactInstalled} onClick={() => void installVersion(v.id)}>
                               {installingVersionId === v.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                               {!installingVersionId && !exactInstalled ? (hasOtherInstalledVersion ? <Repeat2 className="mr-2 h-4 w-4" /> : <Plus className="mr-2 h-4 w-4" />) : null}
                               {exactInstalled ? "Installed" : hasOtherInstalledVersion ? "Switch" : "Install"}

@@ -80,6 +80,51 @@ namespace Spawner.JavaManager
 			};
 		}
 
+		public sealed record JavaUpdateCheck(string? CurrentVersion, string? LatestVersion, bool? UpdateAvailable, string Message);
+
+		public static async Task<JavaUpdateCheck> CheckForUpdates(HttpClient client, string javaPath, CancellationToken ct = default)
+		{
+			var installed = GetInstalledJavaVersions();
+			var major = installed.FirstOrDefault(x => string.Equals(x.Value, javaPath,
+				OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)).Key;
+			if (major is null || !File.Exists(javaPath))
+				return new(null, null, null, "This Java path is not a Spawner-managed runtime. Check for updates with your Java provider.");
+
+			var releasePath = Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(javaPath))!, "release");
+			var current = File.Exists(releasePath)
+				? File.ReadLines(releasePath).FirstOrDefault(x => x.StartsWith("JAVA_RUNTIME_VERSION=", StringComparison.Ordinal))?.Split('=', 2)[1].Trim('"')
+				: null;
+			var package = await GetLatestAdoptiumPackage(client, major, GetAdoptiumOS(), GetAdoptiumArchitecture(), ct)
+				?? throw new InvalidOperationException("No Java runtime is available for this platform.");
+			var comparison = CompareRuntimeVersions(current, package.Version);
+			bool? available = comparison is null ? null : comparison < 0;
+			return new(current, package.Version, available, available switch
+			{
+				true => $"Java update available: {current} → {package.Version}. Update your runtime and set Java Path to the new executable.",
+				false => $"Java {current} is up to date.",
+				_ => $"Latest Java {major}: {package.Version ?? "unknown"}. The installed build could not be compared."
+			});
+		}
+
+		internal static int? CompareRuntimeVersions(string? current, string? latest)
+		{
+			static int[]? Parse(string? value)
+			{
+				if (string.IsNullOrWhiteSpace(value)) return null;
+				// Java 8 uses 1.8.0_XXX-bYY; later releases use MAJOR.MINOR.PATCH+BUILD.
+				value = System.Text.RegularExpressions.Regex.Replace(value, @"^1\.8\.0_", "8.0.");
+				var match = System.Text.RegularExpressions.Regex.Match(value, @"^(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?(?:\+|-b)(\d+)(?:-LTS)?$");
+				if (!match.Success) return null;
+				return Enumerable.Range(1, 5).Select(i => int.TryParse(match.Groups[i].Value, out var n) ? n : 0).ToArray();
+			}
+			var a = Parse(current);
+			var b = Parse(latest);
+			if (a is null || b is null) return null;
+			for (var i = 0; i < a.Length; i++)
+				if (a[i] != b[i]) return a[i].CompareTo(b[i]);
+			return 0;
+		}
+
 		public static async Task InstallNewJavaVersion(
 			HttpClient client,
 			string javaVersion,
@@ -263,7 +308,8 @@ namespace Spawner.JavaManager
 					link,
 					checksum,
 					size.Value,
-					string.IsNullOrWhiteSpace(name) ? $"java-{javaVersion}-{imageType}" : name);
+					string.IsNullOrWhiteSpace(name) ? $"java-{javaVersion}-{imageType}" : name,
+					first["version"]?["openjdk_version"]?.ToString());
 			}
 
 			return null;
@@ -300,7 +346,7 @@ namespace Spawner.JavaManager
 			}
 		}
 
-		private sealed record AdoptiumPackage(string Link, string Checksum, long Size, string Name);
+		private sealed record AdoptiumPackage(string Link, string Checksum, long Size, string Name, string? Version);
 	}
 
 	public sealed record JavaDownloadProgress(

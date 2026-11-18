@@ -11,6 +11,18 @@ public sealed class ReviewRegressionTests : IDisposable
     public ReviewRegressionTests() => Directory.CreateDirectory(_dir);
     public void Dispose() => Directory.Delete(_dir, recursive: true);
 
+    [Theory]
+    [InlineData(InstanceStatus.Online, true, "online")]
+    [InlineData(InstanceStatus.Online, false, "online")]
+    [InlineData(InstanceStatus.Starting, true, "starting")]
+    [InlineData(InstanceStatus.Stopping, false, "stopping")]
+    [InlineData(InstanceStatus.Offline, true, "downloading")]
+    [InlineData(InstanceStatus.Offline, false, "offline")]
+    public void ContentDownloadsPreserveRunningServerStatus(InstanceStatus status, bool downloading, string expected)
+    {
+        Assert.Equal(expected, ModrinthV1Controller.ContentDownloadStatus(status, downloading));
+    }
+
     [Fact]
     public void WebSocketArguments_ReadDeserializedJsonStrings()
     {

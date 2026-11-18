@@ -236,6 +236,7 @@ export async function apiResolvePlayer(args: { name?: string; uuid?: string }) {
 }
 
 export type LaunchSettings = {
+  fabricLoaderVersion?: string | null;
   javaPath: string;
   javaArgs: string;
   serverJarName: string;
@@ -369,11 +370,11 @@ export async function apiRenameInstance(serverId: string, name: string) {
   return data.name;
 }
 
-export async function apiSetGameVersion(serverId: string, version: string) {
+export async function apiSetGameVersion(serverId: string, version: string, fabricLoaderVersion?: string) {
   const res = await apiFetch(`/api/v1/servers/${encodeURIComponent(serverId)}:set-version`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ version }),
+    body: JSON.stringify({ version, fabricLoaderVersion }),
   });
   const data = await readJson<{ version: string }>(res);
   return data.version;
@@ -582,4 +583,9 @@ export async function apiRemoveContent(serverId: string, kind: ApiContentKind, f
     body: JSON.stringify({ kind, fileName }),
   });
   return readJson<{ removed: boolean; fileName: string }>(res);
+}
+
+export async function apiCheckJavaUpdates(serverId: string) {
+  const res = await apiFetch(`/api/v1/servers/${encodeURIComponent(serverId)}/java-updates`);
+  return readJson<{ currentVersion: string | null; latestVersion: string | null; updateAvailable: boolean | null; message: string }>(res);
 }

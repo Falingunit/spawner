@@ -385,7 +385,7 @@ namespace Spawner.Controllers;
 
 		public sealed record SetInstanceTypeReq([property: JsonPropertyName("type")] string? Type);
 		public sealed record RenameInstanceReq([property: JsonPropertyName("name")] string? Name);
-		public sealed record SetGameVersionReq([property: JsonPropertyName("version")] string? Version);
+		public sealed record SetGameVersionReq([property: JsonPropertyName("version")] string? Version, [property: JsonPropertyName("fabricLoaderVersion")] string? FabricLoaderVersion = null);
 
 		[HttpPost("servers/{serverId}:rename")]
 		public IActionResult RenameInstance([FromRoute] string serverId, [FromBody] RenameInstanceReq body)
@@ -481,7 +481,7 @@ namespace Spawner.Controllers;
 			}
 
 			ServerJarUpgradePlan plan;
-			try { plan = await BuildServerJarUpgradePlanAsync(props, versionInfo, ct); }
+			try { plan = await BuildServerJarUpgradePlanAsync(props, versionInfo, ct, body?.FabricLoaderVersion); }
 			catch (Exception ex)
 			{
 				PublishDownloadError(serverId, "server", props.ServerJarName ?? "server.jar", ex.Message);
@@ -984,6 +984,23 @@ namespace Spawner.Controllers;
 
 	// -------------------- Launch settings (GET + PUT with revision) --------------------
 
+	[HttpGet("servers/{serverId}/java-updates")]
+	public async Task<IActionResult> CheckJavaUpdates([FromRoute] string serverId, CancellationToken ct)
+	{
+		Spawner.InstanceProperties props;
+		try { props = _manager.GetInstanceProperties(serverId); }
+		catch { return NotFound(new { error = new { code = "not_found", message = "Server not found" } }); }
+		try
+		{
+			using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+			return Ok(await JavaRuntimeManager.CheckForUpdates(client, props.JavaPath, ct));
+		}
+		catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+		{
+			return StatusCode(502, new { error = new { code = "java_update_check_failed", message = ex.Message } });
+		}
+	}
+
 	[HttpGet("servers/{serverId}/launch-settings")]
 	public IActionResult GetLaunchSettings([FromRoute] string serverId)
 	{
@@ -995,7 +1012,8 @@ namespace Spawner.Controllers;
 		{
 			javaPath = instProps.JavaPath ?? "",
 			javaArgs = instProps.JavaArgs ?? "",
-			serverJarName = instProps.ServerJarName ?? "server.jar"
+			serverJarName = instProps.ServerJarName ?? "server.jar",
+			fabricLoaderVersion = instProps.FabricLoaderVersion
 		};
 
 		var revision = ComputeLaunchRevision(payload.javaPath, payload.javaArgs, payload.serverJarName);
@@ -1037,7 +1055,8 @@ namespace Spawner.Controllers;
 				{
 					javaPath = instProps.JavaPath ?? "",
 					javaArgs = instProps.JavaArgs ?? "",
-					serverJarName = instProps.ServerJarName ?? "server.jar"
+					serverJarName = instProps.ServerJarName ?? "server.jar",
+					fabricLoaderVersion = instProps.FabricLoaderVersion
 				}
 			});
 		}
@@ -1058,7 +1077,7 @@ namespace Spawner.Controllers;
 		_manager.PersistInstanceProperties();
 
 		var nextRevision = ComputeLaunchRevision(javaPath, javaArgs, serverJarName);
-		var response = new { settings = new { javaPath, javaArgs, serverJarName }, revision = nextRevision };
+		var response = new { settings = new { javaPath, javaArgs, serverJarName, fabricLoaderVersion = instProps.FabricLoaderVersion }, revision = nextRevision };
 
 		if (_bus is not null)
 		{
@@ -1067,7 +1086,7 @@ namespace Spawner.Controllers;
 				kind = "launch.updated",
 				serverId,
 				revision = nextRevision,
-				settings = new { javaPath, javaArgs, serverJarName }
+				settings = new { javaPath, javaArgs, serverJarName, fabricLoaderVersion = instProps.FabricLoaderVersion }
 			});
 		}
 
@@ -1614,7 +1633,7 @@ namespace Spawner.Controllers;
 		return javaPath;
 	}
 
-	private static async Task<ServerJarUpgradePlan> BuildServerJarUpgradePlanAsync(Spawner.InstanceProperties props, MojangVersionInfo versionInfo, CancellationToken ct)
+	private static async Task<ServerJarUpgradePlan> BuildServerJarUpgradePlanAsync(Spawner.InstanceProperties props, MojangVersionInfo versionInfo, CancellationToken ct, string? fabricLoaderVersion = null)
 	{
 		if (props.InstanceType == Spawner.InstanceType.Custom)
 			throw new InvalidOperationException("Automatic server-jar replacement is only supported for Vanilla and Fabric instances.");
@@ -1646,7 +1665,7 @@ namespace Spawner.Controllers;
 			if (loaders.Count == 0)
 				throw new InvalidOperationException("No Fabric loader versions are available for the selected Minecraft version.");
 
-			var nextLoader = SelectPreferredFabricLoaderVersion(loaders, props.FabricLoaderVersion);
+			var nextLoader = SelectPreferredFabricLoaderVersion(loaders, props.FabricLoaderVersion, fabricLoaderVersion);
 			var installerJson = await client.GetStringAsync("https://meta.fabricmc.net/v2/versions/installer", ct);
 			var installerManifest = (JsonArray?)JsonNode.Parse(installerJson) ?? new JsonArray();
 			var latestInstaller = installerManifest
@@ -1670,8 +1689,15 @@ namespace Spawner.Controllers;
 		throw new InvalidOperationException("Unsupported instance type.");
 	}
 
-	private static string SelectPreferredFabricLoaderVersion(HashSet<string> loaders, string? preferred)
+	internal static string SelectPreferredFabricLoaderVersion(HashSet<string> loaders, string? preferred, string? requested = null)
 	{
+		if (requested is not null)
+		{
+			requested = requested.Trim();
+			if (!loaders.Contains(requested))
+				throw new InvalidOperationException("Unknown Fabric loader version for selected Minecraft version.");
+			return requested;
+		}
 		if (!string.IsNullOrWhiteSpace(preferred) && loaders.Contains(preferred))
 			return preferred;
 

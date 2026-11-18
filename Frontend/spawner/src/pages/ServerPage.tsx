@@ -1,4 +1,5 @@
 import * as React from "react";
+import { UnsavedChangesBar } from "@/spawner-components/UnsavedChangesBar";
 import { useParams } from "react-router-dom";
 
 import { useServerStore } from "@/stores/serverStore";
@@ -22,6 +23,8 @@ import {
   apiListInstanceTypes,
   apiListMinecraftVersions,
   apiListFabricGameVersions,
+  apiListFabricLoaderVersions,
+  apiCheckJavaUpdates,
   apiResolvePlayer,
   apiSetGameVersion,
   apiSetInstanceType,
@@ -245,6 +248,12 @@ export default function ServerPage() {
   const [instanceTypes, setInstanceTypes] = React.useState<ApiInstanceType[]>([]);
   const [minecraftVersions, setMinecraftVersions] = React.useState<ApiMinecraftVersion[]>([]);
   const [fabricGameVersions, setFabricGameVersions] = React.useState<ApiFabricGameVersion[]>([]);
+  const [fabricLoaderValue, setFabricLoaderValue] = React.useState("");
+  const [fabricLoaders, setFabricLoaders] = React.useState<string[]>([]);
+  const [fabricLoadersLoading, setFabricLoadersLoading] = React.useState(false);
+  const [fabricLoadersError, setFabricLoadersError] = React.useState<string | null>(null);
+  const [javaChecking, setJavaChecking] = React.useState(false);
+  const [javaCheckMessage, setJavaCheckMessage] = React.useState<string | null>(null);
   const [gameVersionValue, setGameVersionValue] = React.useState("");
   const [versionMetaLoading, setVersionMetaLoading] = React.useState(false);
   const [instanceTypeSaving, setInstanceTypeSaving] = React.useState(false);
@@ -279,8 +288,38 @@ export default function ServerPage() {
   const [renameNameSaving, setRenameNameSaving] = React.useState(false);
   const [renameNameError, setRenameNameError] = React.useState<string | null>(null);
 
+  const [tabChangeBlocked, setTabChangeBlocked] = React.useState(false);
+  const [fileDirty, setFileDirty] = React.useState(false);
+  const propertiesDirty = !!storedProperties && Object.keys({ ...properties, ...storedProperties.state })
+    .some((key) => String(properties[key] ?? "") !== String(storedProperties.state[key] ?? ""));
+  const whitelistDirty = !!storedWhitelist && JSON.stringify(whitelistRows.map((r) => ({ name: r.entry.name ?? "", uuid: r.entry.uuid ?? "" }))) !==
+    JSON.stringify(storedWhitelist.entries.map((e) => ({ name: e.name ?? "", uuid: e.uuid ?? "" })));
+  const launchDirty = !!storedLaunch && (
+    !sameText(launch.javaPath, storedLaunch.settings.javaPath) ||
+    launch.javaArgs !== storedLaunch.settings.javaArgs ||
+    !sameText(launch.serverJarName, storedLaunch.settings.serverJarName) ||
+    !sameText(gameVersionValue, server?.version ?? "") ||
+    (server?.type === "fabric" && fabricLoaderValue !== (storedLaunch.settings.fabricLoaderVersion ?? ""))
+  );
+  const activeDirty = activeTab === "properties" ? propertiesDirty : activeTab === "launch" ? launchDirty : activeTab === "whitelist" ? whitelistDirty : false;
+  const activeSaving = propsSaving || launchSaving || wlSaving;
+  const hasUnsavedChanges = propertiesDirty || launchDirty || whitelistDirty || fileDirty;
+
+  React.useEffect(() => {
+    if (!hasUnsavedChanges) setTabChangeBlocked(false);
+  }, [hasUnsavedChanges]);
+
+  React.useEffect(() => {
+    if (!hasUnsavedChanges) return;
+    const preventUnload = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", preventUnload);
+    return () => window.removeEventListener("beforeunload", preventUnload);
+  }, [hasUnsavedChanges]);
+
   React.useEffect(() => {
     setActiveTab("properties");
+    setFileDirty(false);
+    setTabChangeBlocked(false);
     setLoadedTabs(new Set(["properties"]));
   }, [serverId]);
 
@@ -452,11 +491,35 @@ export default function ServerPage() {
   React.useEffect(() => {
     if (!storedLaunch) return;
     setLaunch(storedLaunch.settings);
+    setFabricLoaderValue(storedLaunch.settings.fabricLoaderVersion ?? "");
   }, [storedLaunch]);
 
   React.useEffect(() => {
     setGameVersionValue(server?.version || "");
   }, [server?.version, serverId]);
+
+  React.useEffect(() => {
+    setJavaCheckMessage(null);
+  }, [serverId, launch.javaPath]);
+
+  React.useEffect(() => {
+    if (activeTab !== "launch" || server?.type !== "fabric" || !gameVersionValue) return;
+    const ctrl = new AbortController();
+    setFabricLoadersLoading(true);
+    setFabricLoadersError(null);
+    setFabricLoaders([]);
+    void apiListFabricLoaderVersions(gameVersionValue, { signal: ctrl.signal })
+      .then((versions) => {
+        if (ctrl.signal.aborted) return;
+        const values = versions.map((v) => v.version);
+        setFabricLoaders(values);
+      })
+      .catch((error: unknown) => {
+        if (!ctrl.signal.aborted) setFabricLoadersError(error instanceof Error ? error.message : "Failed to load Fabric versions");
+      })
+      .finally(() => { if (!ctrl.signal.aborted) setFabricLoadersLoading(false); });
+    return () => ctrl.abort();
+  }, [activeTab, server?.type, serverId, gameVersionValue]);
 
   const gameVersionOptions = React.useMemo(() => {
     const raw =
@@ -621,7 +684,7 @@ export default function ServerPage() {
 
   if (!loaded) {
     return (
-      <div className="mx-auto w-full max-w-screen-2xl px-6 py-6">
+      <div className="mx-auto w-full max-w-screen-2xl px-6 py-6 pb-32">
         <div className="text-sm text-muted-foreground">Loading server…</div>
       </div>
     );
@@ -629,7 +692,7 @@ export default function ServerPage() {
 
   if (!server) {
     return (
-      <div className="mx-auto w-full max-w-screen-2xl px-6 py-6">
+      <div className="mx-auto w-full max-w-screen-2xl px-6 py-6 pb-32">
         {storeError ? (
           <div className="mb-3 rounded-md border border-border bg-muted/30 p-3 text-sm">
             Failed to load servers: <span className="font-mono">{storeError}</span>
@@ -651,6 +714,28 @@ export default function ServerPage() {
     } catch (e) {
       setPropsError(e instanceof Error ? e.message : "Failed to refresh properties");
     }
+  }
+
+  function discardTabChanges() {
+    if (activeSaving) return;
+    if (activeTab === "properties" && storedProperties) {
+      setProperties(storedProperties.state);
+      setPropsError(null);
+    } else if (activeTab === "launch" && storedLaunch) {
+      setLaunch(storedLaunch.settings);
+      setGameVersionValue(server?.version ?? "");
+      setFabricLoaderValue(storedLaunch.settings.fabricLoaderVersion ?? "");
+      setLaunchError(null);
+    } else if (activeTab === "whitelist" && storedWhitelist) {
+      wlTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+      wlTimersRef.current.clear();
+      wlTokensRef.current.clear();
+      setWlResolvingByKey({});
+      setWlResolveErrorByKey({});
+      setWhitelistRows(storedWhitelist.entries.map((entry) => ({ key: crypto.randomUUID(), entry: { name: entry.name ?? "", uuid: entry.uuid ?? "" } })));
+      setWlError(null);
+    }
+    setTabChangeBlocked(false);
   }
 
   async function saveProperties() {
@@ -785,8 +870,9 @@ export default function ServerPage() {
         if (next) setLaunch(next.settings);
       }
 
-      if (versionChanged) {
-        const savedVersion = await apiSetGameVersion(serverId, gameVersionValue.trim());
+      const loaderChanged = server?.type === "fabric" && fabricLoaderValue !== (storedLaunch?.settings.fabricLoaderVersion ?? "");
+      if (versionChanged || loaderChanged) {
+        const savedVersion = await apiSetGameVersion(serverId, gameVersionValue.trim(), server?.type === "fabric" ? fabricLoaderValue : undefined);
         useServerStore.getState().updateServer(serverId, { version: savedVersion });
         setGameVersionValue(savedVersion);
         await loadLaunchSettings(serverId);
@@ -979,7 +1065,7 @@ export default function ServerPage() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-screen-2xl px-6 py-6">
+    <div className="mx-auto w-full max-w-screen-2xl px-6 py-6 pb-32">
       {storeError ? (
         <div className="mb-4 rounded-md border border-border bg-muted/30 p-3 text-sm">
           <span className="font-medium">Error:</span> <span className="font-mono">{storeError}</span>
@@ -1278,7 +1364,12 @@ export default function ServerPage() {
       </Dialog>
 
       <div className="mt-6">
-        <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as ServerTab)}>
+        <fieldset disabled={activeSaving} className="min-w-0">
+        <Tabs value={activeTab} onValueChange={(value) => {
+          if (value === activeTab) return;
+          if (hasUnsavedChanges || activeSaving) { setTabChangeBlocked(true); return; }
+          setActiveTab(value as ServerTab);
+        }}>
           <TabsList className="w-full justify-start">
             <TabsTrigger value="properties">
               <Settings className="mr-2 h-4 w-4" />
@@ -1321,7 +1412,7 @@ export default function ServerPage() {
                     <Button
                       variant="secondary"
                       onClick={() => void refreshProperties()}
-                      disabled={propsSaving || propertiesLoading}
+                      disabled={propsSaving || propertiesLoading || propertiesDirty}
                     >
                       <RefreshCw className="mr-2 h-4 w-4" />
                       Refresh
@@ -1393,7 +1484,7 @@ export default function ServerPage() {
                   <CardTitle className="text-base">Launch Settings</CardTitle>
                   <Button
                     onClick={() => void saveLaunchSettings()}
-                    disabled={launchSaving || launchLoading || server.status !== "offline"}
+                    disabled={launchSaving || launchLoading || server.status !== "offline" || (server.type === "fabric" && (fabricLoadersLoading || !!fabricLoadersError || !fabricLoaders.includes(fabricLoaderValue)))}
                   >
                     {launchSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
                     Save
@@ -1466,6 +1557,21 @@ export default function ServerPage() {
 	                  </div>
 	                </div>
 
+                {server.type === "fabric" ? (
+                  <div className="grid gap-2">
+                    <div className="text-sm font-medium">Fabric Loader Version</div>
+                    <Select value={fabricLoaderValue} onValueChange={setFabricLoaderValue}
+                      disabled={launchSaving || server.status !== "offline" || fabricLoadersLoading || fabricLoaders.length === 0}>
+                      <SelectTrigger><SelectValue placeholder={fabricLoadersLoading ? "Loading loaders..." : "Select Fabric loader"} /></SelectTrigger>
+                      <SelectContent>
+                        {fabricLoaders.map((version) => <SelectItem key={version} value={version}>{version}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                    <div className="text-xs text-muted-foreground">Saving replaces the server jar with this loader for the selected Minecraft version.</div>
+                    {fabricLoadersError ? <div role="alert" className="text-sm text-destructive">{fabricLoadersError}</div> : null}
+                  </div>
+                ) : null}
+
 	                <div className="grid gap-2">
 	                  <div className="text-sm font-medium">Java Path</div>
                   <Input
@@ -1477,6 +1583,22 @@ export default function ServerPage() {
                     autoCorrect="off"
                     autoCapitalize="off"
                   />
+                </div>
+
+                <div className="grid gap-2">
+                  <Button variant="outline" className="w-fit" disabled={javaChecking || launchSaving || launchLoading || !storedLaunch || launch.javaPath !== storedLaunch.settings.javaPath}
+                    onClick={async () => {
+                      setJavaChecking(true);
+                      setJavaCheckMessage(null);
+                      try { setJavaCheckMessage((await apiCheckJavaUpdates(serverId)).message); }
+                      catch (error) { setJavaCheckMessage(error instanceof Error ? error.message : "Failed to check Java updates"); }
+                      finally { setJavaChecking(false); }
+                    }}>
+                    {javaChecking ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                    {javaChecking ? "Checking Java updates..." : "Check for Java updates"}
+                  </Button>
+                  <div className="text-xs text-muted-foreground">Checks the saved Java path for updates within its current major version. Save path changes before checking.</div>
+                  {javaCheckMessage ? <div role="status" className="text-sm">{javaCheckMessage}</div> : null}
                 </div>
 
                 <div className="grid gap-2">
@@ -1779,7 +1901,7 @@ export default function ServerPage() {
               </CardHeader>
               <CardContent>
                 <React.Suspense fallback={<div className="text-sm text-muted-foreground">Loading files...</div>}>
-                  <FileExplorer serverId={serverId} />
+                  <FileExplorer serverId={serverId} onDirtyChange={setFileDirty} />
                 </React.Suspense>
               </CardContent>
             </Card>
@@ -1794,6 +1916,19 @@ export default function ServerPage() {
           </TabsContent>
           ) : null}
         </Tabs>
+        </fieldset>
+        {activeDirty ? (
+          <div className="fixed inset-x-4 bottom-4 z-40 mx-auto max-w-3xl">
+            <UnsavedChangesBar
+              saving={activeSaving}
+              blocked={tabChangeBlocked}
+              error={activeTab === "properties" ? propsError : activeTab === "launch" ? launchError : wlError}
+              saveDisabled={activeTab === "launch" && (launchLoading || server.status !== "offline" || (server.type === "fabric" && (fabricLoadersLoading || !!fabricLoadersError || !fabricLoaders.includes(fabricLoaderValue))))}
+              onSave={() => { void (activeTab === "properties" ? saveProperties() : activeTab === "launch" ? saveLaunchSettings() : saveWhitelist()); }}
+              onDiscard={discardTabChanges}
+            />
+          </div>
+        ) : null}
       </div>
     </div>
   );

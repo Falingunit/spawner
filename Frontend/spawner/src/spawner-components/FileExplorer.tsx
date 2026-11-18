@@ -1,4 +1,5 @@
 import * as React from "react";
+import { UnsavedChangesBar } from "@/spawner-components/UnsavedChangesBar";
 
 import { ArrowUp, Download, FilePlus2, FileText, Folder, FolderPlus, Image as ImageIcon, RefreshCw, Scissors, Search, Trash2, Upload } from "lucide-react";
 
@@ -79,7 +80,7 @@ function entryIcon(e: Entry) {
   return <FileText className="h-4 w-4" />;
 }
 
-export function FileExplorer({ serverId }: { serverId: string }) {
+export function FileExplorer({ serverId, onDirtyChange }: { serverId: string; onDirtyChange?: (dirty: boolean) => void }) {
   const rootRef = React.useRef<HTMLDivElement | null>(null);
   const [cwd, setCwd] = React.useState<string>("");
   const [entries, setEntries] = React.useState<Entry[]>([]);
@@ -108,7 +109,11 @@ export function FileExplorer({ serverId }: { serverId: string }) {
 
   // editor/viewer state
   const [textContent, setTextContent] = React.useState("");
-  const [textDirty, setTextDirty] = React.useState(false);
+  const [savedText, setSavedText] = React.useState("");
+  const textDirty = textContent !== savedText;
+  const [closeBlocked, setCloseBlocked] = React.useState(false);
+  React.useEffect(() => { onDirtyChange?.(textDirty); }, [textDirty, onDirtyChange]);
+  React.useEffect(() => { if (!textDirty) setCloseBlocked(false); }, [textDirty]);
   const [textLoading, setTextLoading] = React.useState(false);
   const [textError, setTextError] = React.useState<string | null>(null);
   const skipNextTextLoadRef = React.useRef(false);
@@ -161,7 +166,7 @@ export function FileExplorer({ serverId }: { serverId: string }) {
     setOpen(null);
     setOpenModal(false);
     setTextContent("");
-    setTextDirty(false);
+    setSavedText("");
     setTextError(null);
     setRenamingPath(null);
     setRenameValue("");
@@ -195,7 +200,7 @@ export function FileExplorer({ serverId }: { serverId: string }) {
     if (e.isDir) return;
     if (IMAGE_EXT.has(ext(e.name))) return;
 
-    setTextDirty(false);
+    setSavedText("");
     setTextError(null);
     setTextLoading(true);
     try {
@@ -214,6 +219,7 @@ export function FileExplorer({ serverId }: { serverId: string }) {
       }
       const data = (await res.json()) as { content?: string };
       setTextContent(data.content ?? "");
+      setSavedText(data.content ?? "");
     } catch (ex) {
       setTextContent("");
       setTextError(ex instanceof Error ? ex.message : "Failed to open as text");
@@ -224,10 +230,10 @@ export function FileExplorer({ serverId }: { serverId: string }) {
 
   React.useEffect(() => {
     if (!open) return;
-    setTextDirty(false);
     setTextError(null);
     if (openIsImage || open.isDir) {
       setTextContent("");
+      setSavedText("");
       return;
     }
 
@@ -271,7 +277,7 @@ export function FileExplorer({ serverId }: { serverId: string }) {
       }
       const data = (await res.json()) as { content?: string };
       setTextContent(data.content ?? "");
-      setTextDirty(false);
+      setSavedText(data.content ?? "");
       skipNextTextLoadRef.current = true;
       setOpen(e);
       setOpenModal(true);
@@ -297,7 +303,7 @@ export function FileExplorer({ serverId }: { serverId: string }) {
         const msg = await res.text();
         throw new Error(msg || `${res.status} ${res.statusText}`);
       }
-      setTextDirty(false);
+      setSavedText(textContent);
       await refresh(cwd);
     } catch (ex) {
       setTextError(ex instanceof Error ? ex.message : "Failed to save");
@@ -725,7 +731,15 @@ export function FileExplorer({ serverId }: { serverId: string }) {
         ref={rootRef}
         tabIndex={0}
         onKeyDown={handleKeyDown}
-        onMouseDown={() => rootRef.current?.focus()}
+        onMouseDown={(event) => {
+          if (event.button !== 0) return;
+          const target = event.target as HTMLElement;
+          // Let controls and file rows receive focus normally; focusing the
+          // whole explorer must not scroll the page back to its top.
+          const focusTarget = target.closest("button, input, textarea, select, a, [contenteditable], [tabindex]");
+          if (focusTarget && focusTarget !== event.currentTarget) return;
+          event.currentTarget.focus({ preventScroll: true });
+        }}
       >
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -983,17 +997,18 @@ export function FileExplorer({ serverId }: { serverId: string }) {
       <Dialog
         open={openModal}
         onOpenChange={(v) => {
+          if (!v && (textDirty || textLoading)) { setCloseBlocked(true); return; }
           setOpenModal(v);
           if (!v) setOpen(null);
         }}
       >
-        <DialogContent className="max-h-[85vh] w-[min(1400px,95vw)] max-w-[95vw] overflow-hidden p-0">
-          <div className="flex flex-col">
-            <DialogHeader className="border-b border-border p-4 pr-12">
+        <DialogContent className="flex max-h-[85vh] w-[min(1400px,95vw)] max-w-[95vw] flex-col overflow-hidden p-0">
+          <div className="flex min-h-0 min-w-0 flex-col overflow-hidden">
+            <DialogHeader className="min-w-0 shrink-0 border-b border-border p-4 pr-12">
               <DialogTitle className="truncate font-mono text-sm">{open?.path ?? ""}</DialogTitle>
             </DialogHeader>
 
-            <div className="max-h-[70vh] overflow-auto p-4">
+            <div className="min-h-0 min-w-0 flex-1 overflow-auto p-4">
               {open && open.isDir ? null : openIsImage ? (
                 <div className="rounded-md border border-border bg-background/40 p-3">
                   <img src={openRawUrl} alt="" className="max-h-[70vh] max-w-full" />
@@ -1016,22 +1031,22 @@ export function FileExplorer({ serverId }: { serverId: string }) {
                     autoCapitalize="off"
                     onChange={(e) => {
                       setTextContent(e.target.value);
-                      setTextDirty(true);
                     }}
-                    className="min-h-[55vh] font-mono text-xs !whitespace-pre !overflow-x-auto !overflow-y-auto"
+                    className="h-[55vh] min-h-0 min-w-0 max-w-full resize-none field-sizing-fixed overflow-auto whitespace-pre font-mono text-xs"
                     disabled={textLoading}
                   />
                 </>
               )}
             </div>
 
-            <DialogFooter className="border-t border-border p-4">
+            <DialogFooter className="min-w-0 shrink-0 border-t border-border p-4">
               {!openIsImage ? (
                 <>
-                  <div className="mr-auto text-xs text-muted-foreground">{textDirty ? "Unsaved changes" : "Saved"}</div>
-                  <Button onClick={() => void saveText()} disabled={textLoading || !textDirty}>
-                    Save
-                  </Button>
+                  {textDirty ? (
+                    <UnsavedChangesBar saving={textLoading} blocked={closeBlocked}
+                      onSave={() => void saveText()}
+                      onDiscard={() => { setTextContent(savedText); setTextError(null); setCloseBlocked(false); }} />
+                  ) : <div className="mr-auto text-xs text-muted-foreground">Saved</div>}
                 </>
               ) : null}
             </DialogFooter>

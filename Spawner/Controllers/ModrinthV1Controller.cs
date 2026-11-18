@@ -307,8 +307,6 @@ public sealed class ModrinthV1Controller : ControllerBase
 
 		if (!TryGetFabricInstanceProps(serverId, out var props, out var err))
 			return err!;
-		if (_manager.IsInstanceRunning(serverId))
-			return StatusCode(409, new { error = new { code = "server_running", message = "Stop the server before installing mods." } });
 
 		ModrinthVersion version;
 		try { version = await _modrinth.GetVersionAsync(versionId, ct); }
@@ -1113,6 +1111,9 @@ public sealed class ModrinthV1Controller : ControllerBase
 		return Convert.ToHexString(hash).ToLowerInvariant();
 	}
 
+	internal static string ContentDownloadStatus(InstanceStatus status, bool downloading) =>
+		status == InstanceStatus.Offline && downloading ? "downloading" : status.ToString().ToLowerInvariant();
+
 	private void PublishDownloadState(string serverId, string stage, string? fileName, string message)
 	{
 		var status = new InstanceInitStatus(
@@ -1124,14 +1125,14 @@ public sealed class ModrinthV1Controller : ControllerBase
 			percent: null,
 			message: message);
 		_manager.SetInitStatus(serverId, status);
-		_bus?.Publish(Topics.Servers, new { kind = "server.patch", serverId, patch = new { init = status, status = "downloading" } });
+		_bus?.Publish(Topics.Servers, new { kind = "server.patch", serverId, patch = new { init = status, status = ContentDownloadStatus(_manager.GetInstanceStatus(serverId), true) } });
 	}
 
 	private void PublishDownloadReady(string serverId)
 	{
 		_manager.ClearInitStatus(serverId);
 		var ready = _manager.GetInitStatus(serverId);
-		_bus?.Publish(Topics.Servers, new { kind = "server.patch", serverId, patch = new { init = ready, status = "offline" } });
+		_bus?.Publish(Topics.Servers, new { kind = "server.patch", serverId, patch = new { init = ready, status = ContentDownloadStatus(_manager.GetInstanceStatus(serverId), false) } });
 	}
 
 	private void PublishDownloadError(string serverId, string stage, string? fileName, string message)
@@ -1145,7 +1146,7 @@ public sealed class ModrinthV1Controller : ControllerBase
 			percent: null,
 			message: message);
 		_manager.SetInitStatus(serverId, err);
-		_bus?.Publish(Topics.Servers, new { kind = "server.patch", serverId, patch = new { init = err, status = "offline" } });
+		_bus?.Publish(Topics.Servers, new { kind = "server.patch", serverId, patch = new { init = err, status = ContentDownloadStatus(_manager.GetInstanceStatus(serverId), false) } });
 	}
 
 	private bool TryGetInstanceProps(string serverId, out InstanceProperties props, out IActionResult? error)

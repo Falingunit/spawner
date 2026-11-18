@@ -18,7 +18,8 @@ namespace Spawner
 		private Settings _settings;
 		private InstanceStatus _status;
 
-		private List<string> _onlinePlayers;
+		private readonly object _playersLock = new();
+		private readonly HashSet<string> _onlinePlayers = new(StringComparer.OrdinalIgnoreCase);
 
 		public Instance(InstanceProperties instanceProperties, Settings settings)
 		{
@@ -26,41 +27,32 @@ namespace Spawner
 			InstanceProperties = instanceProperties;
 			_settings = settings;
 			_status = InstanceStatus.Offline;
-			_onlinePlayers = new();
 
 			Server.OnStopped += () => SetStatus(InstanceStatus.Offline);
-			Server.OnStdOutLine += (line) =>
+			Server.OnStdOutLine += ProcessServerLogLine;
+		}
+
+		internal void ProcessServerLogLine(string line)
+		{
+			lock (_playersLock)
 			{
-				// Server ready
-				if (ServerLogParser.DoneRegex().IsMatch(line))
-				{
+				// Ignore buffered output arriving after the process has exited.
+				if (_status == InstanceStatus.Offline) return;
+				if (_status == InstanceStatus.Starting && ServerLogParser.DoneRegex().IsMatch(line))
 					SetStatus(InstanceStatus.Online);
+
+				var login = ServerLogParser.LoginRegex().Match(line);
+				if (login.Success)
+				{
+					if (_onlinePlayers.Add(login.Groups["name"].Value))
+						OnPlayersChanged?.Invoke(_onlinePlayers.Count);
+					return;
 				}
 
-				// Player login
-				{
-					var m = ServerLogParser.LoginRegex().Match(line);
-					if (m.Success)
-					{
-						var playerName = m.Groups["name"].Value;
-						_onlinePlayers.Add(playerName);
-						OnPlayersChanged?.Invoke(_onlinePlayers.Count);
-						return;
-					}
-				}
-
-				// Player logout
-				{
-					var m = ServerLogParser.LogoutRegex().Match(line);
-					if (m.Success)
-					{
-						var playerName = m.Groups["name"].Value;
-						_onlinePlayers.Remove(playerName);
-						OnPlayersChanged?.Invoke(_onlinePlayers.Count);
-						return;
-					}
-				}
-			};
+				var logout = ServerLogParser.LogoutRegex().Match(line);
+				if (logout.Success && _onlinePlayers.Remove(logout.Groups["name"].Value))
+					OnPlayersChanged?.Invoke(_onlinePlayers.Count);
+			}
 		}
 
 		public async Task InitializeVanillaInstance(Func<InstanceDownloadProgress, Task>? onProgress = null, Func<JavaDownloadProgress, Task>? onProgressJava = null, CancellationToken ct = default)
@@ -266,7 +258,7 @@ namespace Spawner
 
 		public int GetCurrentPlayerCount()
 		{
-			return _onlinePlayers.Count;
+			lock (_playersLock) return _onlinePlayers.Count;
 		}
 
 
@@ -315,8 +307,16 @@ namespace Spawner
 
 		public void SetStatus(InstanceStatus newStatus)
 		{
-			_status = newStatus;
-			OnStatusChanged?.Invoke(newStatus);
+			lock (_playersLock)
+			{
+				_status = newStatus;
+				if (newStatus is InstanceStatus.Offline or InstanceStatus.Starting)
+				{
+					_onlinePlayers.Clear();
+					OnPlayersChanged?.Invoke(0);
+				}
+				OnStatusChanged?.Invoke(newStatus);
+			}
 		}
 	}
 
@@ -326,10 +326,10 @@ namespace Spawner
 		[GeneratedRegex(@"Done \(\d+(\.\d+)?s\)! For help, type ""help""")]
 		public static partial Regex DoneRegex();
 
-		[GeneratedRegex(@"\]: (?<name>[^[]+)\[.*\] logged in with entity id\b")]
+		[GeneratedRegex(@"\]: (?<name>[A-Za-z0-9_]{1,16})(?:\[.*\] logged in with entity id\b| joined the game$)")]
 		public static partial Regex LoginRegex();
 
-		[GeneratedRegex(@"\]: (?<name>[^ ]+) lost connection:")]
+		[GeneratedRegex(@"\]: (?<name>[A-Za-z0-9_]{1,16})(?: lost connection:| left the game$)")]
 		public static partial Regex LogoutRegex();
 	}
 
