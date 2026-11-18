@@ -1,6 +1,7 @@
 using Spawner.Realtime;
 using System.Net.WebSockets;
 using System.Text;
+using System.Text.Json;
 
 namespace Spawner.Tests;
 
@@ -36,26 +37,29 @@ public sealed class EventBusTests
 	public async Task StoreOnly_DoesNotBroadcast()
 	{
 		var bus = new EventBus();
-		var ws = new TestWebSocket();
+		using var ws = new TestWebSocket();
 		var client = new WsClient("c1", ws);
 		client.Subscribe(new[] { Topics.Servers });
 		bus.Register(client);
 
-		using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-		var sendLoop = Task.Run(() => client.RunSendLoopAsync(cts.Token));
-
 		bus.StoreOnly(Topics.Servers, new { kind = "snapshot", servers = Array.Empty<object>() });
-		await Task.Delay(50);
+		var published = bus.Publish(Topics.Servers, new { kind = "snapshot", servers = Array.Empty<object>() });
 
-		Assert.Empty(ws.SentMessages);
-
-		bus.Publish(Topics.Servers, new { kind = "snapshot", servers = Array.Empty<object>() });
-		await Task.Delay(50);
-
-		Assert.NotEmpty(ws.SentMessages);
-
-		cts.Cancel();
-		await Task.WhenAny(sendLoop, Task.Delay(1000));
+		// Queue both operations first; the fake socket completes sends synchronously,
+		// so the loop drains all queued messages before waiting for more work.
+		using var cts = new CancellationTokenSource();
+		var sendLoop = client.RunSendLoopAsync(cts.Token);
+		try
+		{
+			var message = Assert.Single(ws.SentMessages);
+			using var json = JsonDocument.Parse(message);
+			Assert.Equal(published.eventId, json.RootElement.GetProperty("eventId").GetString());
+		}
+		finally
+		{
+			cts.Cancel();
+			try { await sendLoop; } catch (OperationCanceledException) { }
+		}
 	}
 
 	[Fact]
