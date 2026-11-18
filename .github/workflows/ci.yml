@@ -6,6 +6,15 @@ on:
   pull_request:
 
 jobs:
+  release-updater:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check updater syntax and integration tests
+        run: |
+          bash -n scripts/update-spawner-release.sh
+          python3 -m unittest discover -s scripts/tests -v
+
   backend:
     runs-on: ubuntu-latest
     steps:

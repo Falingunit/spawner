@@ -81,6 +81,19 @@ If GitHub Releases are enabled with `.github/workflows/release-per-commit.yml`, 
 
 For Ubuntu Server setup using the prebuilt release packages, see `docs/ubuntu-server-lts.md`.
 
+For existing production installations, install the release updater once:
+
+```bash
+sudo install -m 0755 scripts/update-spawner-release.sh /usr/local/bin/spawner-update
+```
+
+Then stop Minecraft instances in the UI and run `sudo spawner-update`. This
+installs the release for the current `master` commit, preserves local configuration,
+and restores the previous application files if startup fails. You can also pass
+`commit-<full-sha>` to select a release. See the deployment guide for dependencies,
+configuration and backup details. New releases include a standalone
+`spawner-update` asset for servers without a checkout.
+
 ## Ubuntu Server LTS install / setup
 
 See `docs/ubuntu-server-lts.md`.

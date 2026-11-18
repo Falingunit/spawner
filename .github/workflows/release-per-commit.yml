@@ -16,6 +16,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Test release updater
+        run: |
+          bash -n scripts/update-spawner-release.sh
+          python3 -m unittest discover -s scripts/tests -v
+
       - name: Verify frontend source exists
         run: |
           test -f Frontend/spawner/package.json || {
@@ -63,6 +68,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          cp scripts/update-spawner-release.sh out/spawner-update
           mkdir -p out/package/spawner/backend
           mkdir -p out/package/spawner/www
           cp -R out/backend/. out/package/spawner/backend/
@@ -80,6 +86,7 @@ jobs:
             out/spawner-backend-linux-x64-${{ github.sha }}.tar.gz
             out/spawner-frontend-dist-${{ github.sha }}.tar.gz
             out/spawner-full-linux-x64-${{ github.sha }}.tar.gz
+            out/spawner-update
           if-no-files-found: error
 
       - name: Create/update GitHub release
@@ -95,3 +102,4 @@ jobs:
             out/spawner-backend-linux-x64-${{ github.sha }}.tar.gz
             out/spawner-frontend-dist-${{ github.sha }}.tar.gz
             out/spawner-full-linux-x64-${{ github.sha }}.tar.gz
+            out/spawner-update

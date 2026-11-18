@@ -213,42 +213,88 @@ sudo certbot --nginx -d your-domain.example
 
 ## 10. Upgrade / redeploy process
 
-### Option A: Upgrade using prebuilt release package
+### One-command release updates (recommended)
+
+Install the updater once from your checkout:
 
 ```bash
-cd /tmp
-wget https://github.com/<owner>/<repo>/releases/download/commit-<sha>/spawner-full-linux-x64-<sha>.tar.gz
-tar -xzf spawner-full-linux-x64-<sha>.tar.gz
-sudo rm -rf /opt/spawner/app/backend
-sudo cp -r spawner/backend /opt/spawner/app/backend
-sudo rm -rf /opt/spawner/www/*
-sudo cp -r spawner/www/* /opt/spawner/www/
-sudo chown -R spawner:spawner /opt/spawner/app
-sudo chown -R www-data:www-data /opt/spawner/www
-sudo systemctl restart spawner
-sudo systemctl status spawner
+sudo apt install -y curl python3 rsync util-linux
+sudo install -m 0755 scripts/update-spawner-release.sh /usr/local/bin/spawner-update
 ```
 
-### Option B: Upgrade from source
+No checkout on production? New releases include a standalone `spawner-update`
+asset. Download that asset from the chosen GitHub Release, then install it:
 
 ```bash
-# Pull latest source
-git pull
-
-# Publish backend
-dotnet publish Spawner/Spawner.csproj -c Release -o /opt/spawner/app/backend
-
-# Build frontend
-cd Frontend/spawner
-pnpm install --frozen-lockfile
-pnpm run build
-sudo rm -rf /opt/spawner/www/*
-sudo cp -r dist/* /opt/spawner/www/
-
-# Restart backend
-sudo systemctl restart spawner
-sudo systemctl status spawner
+sudo install -m 0755 ./spawner-update /usr/local/bin/spawner-update
 ```
+
+For each update, stop Minecraft instances in the UI, wait for downloads to
+finish, and keep the UI idle during maintenance. Run:
+
+```bash
+sudo spawner-update
+```
+
+This installs the release for the **current `master` commit**, including prereleases.
+If that commit's release is still building or failed, it exits without changing the
+installation. It does not select releases from other branches. To choose a
+particular release, including an older version:
+
+```bash
+sudo spawner-update commit-<full-40-character-sha>
+```
+
+The updater downloads and validates the package before stopping the service,
+checks that all instances are offline, backs up backend/frontend files to
+`/opt/spawner-backups`, installs both components, and checks the running backend's
+`/api/v1/servers` endpoint. A deployment or startup failure automatically restores
+the previous application files and attempts to restart the previous backend.
+It prevents concurrent updater runs. Minecraft instances remain stopped; refresh
+the UI, verify the update, and start them when ready. Nginx does not need restarting.
+
+Existing `appsettings*.json` files and backend directories `Instances`, `Spawner`,
+and `JavaRuntimes` are preserved. New configuration files are installed only when
+absent; merge new settings from release notes manually. Normal instance data and
+Java runtimes under the service user's app-data directory are untouched. Keep
+custom data outside the application directories. Application backups are **not**
+world backups, and rollback does not reverse data migrations; take a separate
+instance-data backup before upgrades. Retained backups are not automatically pruned.
+
+The defaults match this guide and use the public `Falingunit/spawner` repository.
+For custom paths, service names or ports, create `/etc/spawner-update.conf`:
+
+```bash
+REPO=Falingunit/spawner
+BRANCH=master
+INSTALL_ROOT=/opt/spawner
+FRONTEND_INSTALL_DIR=/opt/spawner/www
+BACKUP_ROOT=/opt/spawner-backups
+SERVICE=spawner
+API_URL=http://127.0.0.1:5000
+BACKEND_OWNER=spawner:spawner
+FRONTEND_OWNER=www-data:www-data
+HEALTH_ATTEMPTS=30
+```
+
+If nginx serves `/var/www/spawner/www` and the backend listens on port 5001,
+set `FRONTEND_INSTALL_DIR=/var/www/spawner/www` and
+`API_URL=http://127.0.0.1:5001`. The frontend need not be moved. When omitted,
+`FRONTEND_INSTALL_DIR` defaults to `$INSTALL_ROOT/www`.
+
+This is sourced as shell configuration; it must be root-owned and not writable by
+other users (`sudo chown root:root /etc/spawner-update.conf` and
+`sudo chmod 0644 /etc/spawner-update.conf`). The updater requires a running,
+reachable existing installation, Linux x64 and the ASP.NET Core 10 runtime.
+It does not require Node.js, pnpm, Git or the .NET SDK. Private GitHub repositories
+are not supported by the download commands. Installing the updater is separate
+from updating the application; reinstall it when updater fixes are released.
+
+### Source-build deployments
+
+`scripts/update-spawner.sh` remains available for building `main` on the server.
+It requires Git, the .NET SDK and pnpm, and its configuration is at the top of the
+script. Prefer the release updater above for production installations.
 
 ## Troubleshooting
 
