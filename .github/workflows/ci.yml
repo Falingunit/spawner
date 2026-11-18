@@ -25,12 +25,15 @@ jobs:
         working-directory: Frontend/spawner
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "12.21.0"
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
-          cache: "npm"
-          cache-dependency-path: Frontend/spawner/package-lock.json
+          node-version: "26"
+          cache: "pnpm"
+          cache-dependency-path: Frontend/spawner/pnpm-lock.yaml
       - name: Install
-        run: npm ci
+        run: pnpm install --frozen-lockfile
       - name: Build
-        run: npm run build
+        run: pnpm run build

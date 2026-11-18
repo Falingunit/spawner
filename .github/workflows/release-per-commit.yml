@@ -30,22 +30,22 @@ jobs:
         with:
           dotnet-version: "10.0.x"
 
-      - name: Setup Node.js (latest 25.x)
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "12.21.0"
+      - name: Setup Node.js (26.x)
         uses: actions/setup-node@v4
         with:
-          node-version: "25"
+          node-version: "26"
           check-latest: true
-          cache: "npm"
-          cache-dependency-path: Frontend/spawner/package-lock.json
-
-      - name: Update npm to latest
-        run: npm install -g npm@latest
+          cache: "pnpm"
+          cache-dependency-path: Frontend/spawner/pnpm-lock.yaml
 
       - name: Show tool versions
         run: |
           dotnet --version
           node --version
-          npm --version
+          pnpm --version
 
       - name: Restore and test backend
         run: dotnet test spawner.sln --configuration Release
@@ -56,8 +56,8 @@ jobs:
       - name: Build frontend
         working-directory: Frontend/spawner
         run: |
-          npm ci
-          npm run build
+          pnpm install --frozen-lockfile
+          pnpm run build
 
       - name: Assemble release package
         shell: bash

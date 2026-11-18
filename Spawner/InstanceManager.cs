@@ -22,6 +22,8 @@ namespace Spawner
 	public class InstanceManager
 	{
 		private readonly Settings _settings;
+		private readonly object _persistenceLock = new();
+		private readonly ConcurrentDictionary<string, SemaphoreSlim> _operationLocks = new();
 		private readonly string _instancesLocation;
 		private readonly string[] _legacyCandidates;
 		private readonly ConcurrentDictionary<string, Instance> _instances = new();
@@ -204,8 +206,28 @@ namespace Spawner
 			_ = task.ContinueWith(_ => { }, TaskScheduler.Default);
 		}
 
+		// A lease spans async upgrades and synchronous starts; reject overlapping operations.
+		public IDisposable? TryBeginInstanceOperation(string instanceID)
+		{
+			var gate = _operationLocks.GetOrAdd(instanceID, _ => new SemaphoreSlim(1, 1));
+			return gate.Wait(0) ? new OperationLease(gate) : null;
+		}
+
+		private sealed class OperationLease(SemaphoreSlim gate) : IDisposable
+		{
+			private int _disposed;
+			public void Dispose()
+			{
+				if (Interlocked.Exchange(ref _disposed, 1) == 0) gate.Release();
+			}
+		}
+
 		public void StartInstance(string instanceID)
 		{
+			using var operation = TryBeginInstanceOperation(instanceID)
+				?? throw new InvalidOperationException("Another instance operation is in progress.");
+			if (GetInitStatus(instanceID).state == "downloading")
+				throw new InvalidOperationException("Wait for downloads to finish before starting.");
 			var inst = GetInstanceOrThrow(instanceID);
 			if (inst.InstanceProperties.IsArchived)
 				throw new InvalidOperationException("Instance is archived.");
@@ -354,14 +376,17 @@ namespace Spawner
 
 			Directory.CreateDirectory(instancesLocation);
 
-			List<InstanceProperties> instanceProperties = GetAllInstanceProperties();
-			string json = JsonConvert.SerializeObject(instanceProperties, Formatting.Indented);
+			lock (_persistenceLock)
+			{
+				List<InstanceProperties> instanceProperties = GetAllInstanceProperties();
+				string json = JsonConvert.SerializeObject(instanceProperties, Formatting.Indented);
 
-			var instancesPath = Path.Combine(instancesLocation, "instances.json");
-			var tmp = instancesPath + ".tmp";
+				var instancesPath = Path.Combine(instancesLocation, "instances.json");
+				var tmp = instancesPath + ".tmp";
 
-			File.WriteAllText(tmp, json);
-			File.Move(tmp, instancesPath, overwrite: true);
+				File.WriteAllText(tmp, json);
+				File.Move(tmp, instancesPath, overwrite: true);
+			}
 		}
 
 		public void PersistInstanceProperties()

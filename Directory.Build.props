@@ -1,0 +1,7 @@
+<Project>
+  <PropertyGroup>
+    <!-- Some distro-packaged .NET SDKs omit ASP.NET Core package-pruning metadata.
+         Allow restore to proceed when it is absent; dependency auditing stays enabled. -->
+    <AllowMissingPrunePackageData Condition="'$(AllowMissingPrunePackageData)' == ''">true</AllowMissingPrunePackageData>
+  </PropertyGroup>
+</Project>

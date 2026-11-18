@@ -171,7 +171,7 @@ public sealed class WsV1Controller : ControllerBase
 		finally
 		{
 			sendLoopCts.Cancel();
-			if (client != null) _bus.Unregister(client.ClientId);
+			if (client != null) _bus.Unregister(client.SessionId);
 		}
 	}
 
@@ -213,17 +213,17 @@ public sealed class WsV1Controller : ControllerBase
 			switch (msg.name)
 			{
 				case "server.start":
-					_manager.StartInstance((string)msg.args!["serverId"]!);
+					_manager.StartInstance(GetRequiredArgument(msg.args, "serverId"));
 					await client.SendAsync(JsonSerializer.Serialize(new Envelope(type: "cmd_ack", requestId: msg.requestId)));
 					break;
 
 				case "server.stop":
-					await _manager.StopInstance((string)msg.args!["serverId"]!);
+					await _manager.StopInstance(GetRequiredArgument(msg.args, "serverId"));
 					await client.SendAsync(JsonSerializer.Serialize(new Envelope(type: "cmd_ack", requestId: msg.requestId)));
 					break;
 
 				case "console.send":
-					_manager.SendCommandToInstance((string)msg.args!["serverId"]!, (string)msg.args!["command"]!);
+					_manager.SendCommandToInstance(GetRequiredArgument(msg.args, "serverId"), GetRequiredArgument(msg.args, "command"));
 					await client.SendAsync(JsonSerializer.Serialize(new Envelope(type: "cmd_ack", requestId: msg.requestId)));
 					break;
 
@@ -244,6 +244,14 @@ public sealed class WsV1Controller : ControllerBase
 				error: new ApiError("cmd_failed", ex.Message)
 			)));
 		}
+	}
+
+	internal static string GetRequiredArgument(Dictionary<string, JsonElement>? args, string name)
+	{
+		if (args is null || !args.TryGetValue(name, out var value) || value.ValueKind != JsonValueKind.String ||
+			string.IsNullOrWhiteSpace(value.GetString()))
+			throw new ArgumentException($"'{name}' must be a non-empty string.");
+		return value.GetString()!;
 	}
 
 	internal static async Task<string?> ReceiveTextAsync(WebSocket ws, CancellationToken ct)
@@ -292,5 +300,5 @@ public sealed class WsV1Controller : ControllerBase
 	private record Sub(string topic);
 	private record SubscribeMsg(string type, string[]? topics);
 	private record UnsubscribeMsg(string type, string[]? topics);
-	private record CmdMsg(string type, string requestId, string name, Dictionary<string, object>? args);
+	private record CmdMsg(string type, string requestId, string name, Dictionary<string, JsonElement>? args);
 }

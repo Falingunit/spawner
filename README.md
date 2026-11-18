@@ -15,6 +15,15 @@ Spawner is a Minecraft server instance manager with:
 - CI workflow for backend tests + frontend production build
 - Ubuntu Server LTS deployment guide (systemd + nginx)
 
+## Access security: VPN required
+
+Spawner is deployed behind a VPN, which is its access-control boundary. The application does not provide login or endpoint authentication; anyone who can reach it has administrative access, including file management and process launch settings.
+
+- Allow access to the frontend, `/api/`, and `/ws/` only from trusted VPN clients, using firewall rules or a reverse proxy bound to the VPN interface.
+- Keep the backend bound to `127.0.0.1:5000` when nginx runs on the same host. Do not expose that port or the nginx site to the public internet.
+- The nginx example in the deployment guide requires these VPN restrictions. CORS and HTTPS do not replace access control.
+- If public access is needed later, add authentication to both HTTP and WebSocket endpoints before exposing them.
+
 ## Local development
 
 ### Backend
@@ -29,10 +38,12 @@ Notes:
 
 ### Frontend
 
+Use Node.js 26+ and pnpm 12.21.0 (pinned in `package.json`).
+
 ```bash
 cd Frontend/spawner
-npm ci
-npm run dev
+pnpm install --frozen-lockfile
+pnpm run dev
 ```
 
 Optional frontend env variables (`Frontend/spawner/.env`):
@@ -52,8 +63,8 @@ dotnet publish Spawner/Spawner.csproj -c Release -o .tmp-build/backend
 
 ```bash
 cd Frontend/spawner
-npm ci
-npm run build
+pnpm install --frozen-lockfile
+pnpm run build
 ```
 
 Output:

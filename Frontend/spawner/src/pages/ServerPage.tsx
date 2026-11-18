@@ -789,6 +789,7 @@ export default function ServerPage() {
         const savedVersion = await apiSetGameVersion(serverId, gameVersionValue.trim());
         useServerStore.getState().updateServer(serverId, { version: savedVersion });
         setGameVersionValue(savedVersion);
+        await loadLaunchSettings(serverId);
       }
     } catch (e) {
       setLaunchError(e instanceof Error ? e.message : "Failed to save launch settings");

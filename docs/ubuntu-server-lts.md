@@ -39,10 +39,11 @@ dotnet --info
 ## 3. Install Node.js (build-time only, source-build deployments)
 
 ```bash
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+curl -fsSL https://deb.nodesource.com/setup_26.x | sudo -E bash -
 sudo apt install -y nodejs
+sudo npm install -g pnpm@12.21.0
 node -v
-npm -v
+pnpm -v
 ```
 
 Skip this step if you deploy using the prebuilt release package.
@@ -89,8 +90,8 @@ dotnet publish Spawner/Spawner.csproj -c Release -o /opt/spawner/app/backend
 
 ```bash
 cd Frontend/spawner
-npm ci
-npm run build
+pnpm install --frozen-lockfile
+pnpm run build
 sudo rm -rf /opt/spawner/www/*
 sudo cp -r dist/* /opt/spawner/www/
 ```
@@ -239,8 +240,8 @@ dotnet publish Spawner/Spawner.csproj -c Release -o /opt/spawner/app/backend
 
 # Build frontend
 cd Frontend/spawner
-npm ci
-npm run build
+pnpm install --frozen-lockfile
+pnpm run build
 sudo rm -rf /opt/spawner/www/*
 sudo cp -r dist/* /opt/spawner/www/
 

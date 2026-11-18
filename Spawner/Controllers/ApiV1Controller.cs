@@ -444,6 +444,10 @@ namespace Spawner.Controllers;
 			try { props = _manager.GetInstanceProperties(serverId); }
 			catch { return NotFound(new { error = new { code = "not_found", message = "Server not found" } }); }
 
+			using var operation = _manager.TryBeginInstanceOperation(serverId);
+			if (operation is null || _manager.GetInitStatus(serverId).state == "downloading")
+				return Conflict(new { error = new { code = "operation_in_progress", message = "Wait for the current instance operation to finish." } });
+
 			if (_manager.IsInstanceRunning(serverId))
 			{
 				return StatusCode(409, new

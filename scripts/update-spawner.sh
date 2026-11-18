@@ -91,7 +91,7 @@ sync_dir() {
 
 require_cmd git
 require_cmd dotnet
-require_cmd npm
+require_cmd pnpm
 
 [[ -d "${REPO_DIR}" ]] || die "REPO_DIR does not exist: ${REPO_DIR}"
 [[ -f "${REPO_DIR}/${BACKEND_PROJECT_REL}" ]] || die "Backend project not found under REPO_DIR"
@@ -133,10 +133,10 @@ dotnet publish "${REPO_DIR}/${BACKEND_PROJECT_REL}" \
 ########################################
 
 log "Installing frontend dependencies"
-npm --prefix "${REPO_DIR}/${FRONTEND_PROJECT_DIR_REL}" ci
+pnpm --dir "${REPO_DIR}/${FRONTEND_PROJECT_DIR_REL}" install --frozen-lockfile
 
 log "Building frontend"
-npm --prefix "${REPO_DIR}/${FRONTEND_PROJECT_DIR_REL}" run build
+pnpm --dir "${REPO_DIR}/${FRONTEND_PROJECT_DIR_REL}" run build
 
 ########################################
 # Preserve live backend config

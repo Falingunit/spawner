@@ -4,14 +4,14 @@ React + Vite admin UI for the Spawner backend.
 
 ## Requirements
 
-- Node.js 20+
-- npm 10+
+- Node.js 26+
+- pnpm 12.21.0
 
 ## Local development
 
 ```bash
-npm ci
-npm run dev
+pnpm install --frozen-lockfile
+pnpm run dev
 ```
 
 Dev proxy behavior (`vite.config.ts`):
@@ -37,8 +37,8 @@ If unset, the app uses same-origin by default and has localhost convenience fall
 ## Production build
 
 ```bash
-npm ci
-npm run build
+pnpm install --frozen-lockfile
+pnpm run build
 ```
 
 Output directory: `dist/`

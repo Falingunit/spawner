@@ -769,10 +769,10 @@ public sealed class ModrinthV1Controller : ControllerBase
 		if (string.IsNullOrWhiteSpace(safeName) || !safeName.EndsWith(".jar", StringComparison.OrdinalIgnoreCase))
 			return new(false, 400, "bad_file_name", "Invalid mod file name.", null);
 
-		List<string> removedFileNames;
+		List<string> existingFiles;
 		try
 		{
-			removedFileNames = await RemoveExistingProjectModFilesAsync(props, version.ProjectId, ct);
+			existingFiles = await FindExistingProjectModFilesAsync(props, version.ProjectId, ct);
 		}
 		catch (Exception ex)
 		{
@@ -782,24 +782,50 @@ public sealed class ModrinthV1Controller : ControllerBase
 		var modsDir = Path.Combine(props.InstanceDirectory, "mods");
 		Directory.CreateDirectory(modsDir);
 		var dst = Path.Combine(modsDir, safeName);
-		if (!overwriteExisting && System.IO.File.Exists(dst))
+		if (!overwriteExisting && System.IO.File.Exists(dst) && !existingFiles.Contains(dst, FileSystemPath.Comparer))
 			return new(false, 409, "already_exists", "A mod file with that name already exists.", null);
 
-		var tmp = dst + ".download";
+		var tmp = dst + "." + Guid.NewGuid().ToString("N") + ".download";
 		try
 		{
 			if (System.IO.File.Exists(tmp)) System.IO.File.Delete(tmp);
 			await _modrinth.DownloadToFileAsync(file.Url, tmp, ct);
 			await VerifyHashesAsync(tmp, file.Hashes ?? new Dictionary<string, string>(), ct);
-			System.IO.File.Move(tmp, dst, overwrite: overwriteExisting);
+			CommitModReplacement(tmp, dst, existingFiles, overwriteExisting);
 		}
 		catch (Exception ex)
 		{
 			try { if (System.IO.File.Exists(tmp)) System.IO.File.Delete(tmp); } catch { }
 			return new(false, 409, "install_failed", ex.Message, null);
 		}
-		var payload = await BuildInstalledModPayloadAsync(version, safeName, enabled: true, removedFileNames, ct);
+		var payload = await BuildInstalledModPayloadAsync(version, safeName, enabled: true, existingFiles.Select(x => Path.GetFileName(x)).ToList(), ct);
 		return new(true, 200, "", "", payload);
+	}
+
+	// Keep the previous files recoverable until the verified download is installed.
+	internal static void CommitModReplacement(string temporaryPath, string destination, List<string> existingFiles, bool overwriteExisting)
+	{
+		var backups = new List<(string Original, string Backup)>();
+		try
+		{
+			foreach (var path in existingFiles.Distinct(FileSystemPath.Comparer))
+			{
+				var backup = path + "." + Guid.NewGuid().ToString("N") + ".bak";
+				System.IO.File.Move(path, backup);
+				backups.Add((path, backup));
+			}
+			System.IO.File.Move(temporaryPath, destination, overwrite: overwriteExisting);
+		}
+		catch
+		{
+			foreach (var (original, backup) in backups.AsEnumerable().Reverse())
+				System.IO.File.Move(backup, original, overwrite: true);
+			throw;
+		}
+		foreach (var (_, backup) in backups)
+		{
+			try { System.IO.File.Delete(backup); } catch { /* Recoverable leftover backup. */ }
+		}
 	}
 
 	private async Task<object> BuildInstalledModPayloadAsync(ModrinthVersion version, string fileName, bool enabled, List<string>? removedFileNames, CancellationToken ct)
@@ -821,7 +847,7 @@ public sealed class ModrinthV1Controller : ControllerBase
 		};
 	}
 
-	private async Task<List<string>> RemoveExistingProjectModFilesAsync(InstanceProperties props, string projectId, CancellationToken ct)
+	private async Task<List<string>> FindExistingProjectModFilesAsync(InstanceProperties props, string projectId, CancellationToken ct)
 	{
 		var removed = new List<string>();
 		if (string.IsNullOrWhiteSpace(projectId)) return removed;
@@ -846,18 +872,7 @@ public sealed class ModrinthV1Controller : ControllerBase
 			if (string.IsNullOrWhiteSpace(item.Sha1)) continue;
 			if (!byHash.TryGetValue(item.Sha1, out var v)) continue;
 			if (!string.Equals(v.ProjectId, projectId, StringComparison.OrdinalIgnoreCase)) continue;
-			try
-			{
-				if (System.IO.File.Exists(item.FullPath))
-				{
-					System.IO.File.Delete(item.FullPath);
-					removed.Add(item.FileName);
-				}
-			}
-			catch
-			{
-				// best-effort; install may still proceed and hit filename conflict
-			}
+			if (System.IO.File.Exists(item.FullPath)) removed.Add(item.FullPath);
 		}
 
 		return removed;
@@ -962,14 +977,20 @@ public sealed class ModrinthV1Controller : ControllerBase
 			Dependencies = new Dictionary<string, string> { ["minecraft"] = props.GameVersion ?? "", ["fabric-loader"] = props.FabricLoaderVersion ?? "unknown" }
 		};
 
+		return await BuildMrpackArchiveAsync(index, props.InstanceDirectory,
+			modFiles.Select(p => Path.GetFileName(p)), ct);
+	}
+
+	internal static async Task<byte[]> BuildMrpackArchiveAsync(object index, string instanceDirectory, IEnumerable<string> enabledModFileNames, CancellationToken ct)
+	{
 		using var ms = new MemoryStream();
 		using (var zip = new ZipArchive(ms, ZipArchiveMode.Create, leaveOpen: true))
 		{
 			var entry = zip.CreateEntry("modrinth.index.json", CompressionLevel.Optimal);
-			await using var es = entry.Open();
-			await JsonSerializer.SerializeAsync(es, index, JsonOpts, ct);
+			await using (var es = entry.Open())
+				await JsonSerializer.SerializeAsync(es, index, JsonOpts, ct);
 
-			AddInstanceOverridesToMrpack(zip, props.InstanceDirectory, enabledModFileNames: modFiles.Select(Path.GetFileName).Where(x => !string.IsNullOrWhiteSpace(x))!);
+			AddInstanceOverridesToMrpack(zip, instanceDirectory, enabledModFileNames);
 		}
 		return ms.ToArray();
 	}

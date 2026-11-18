@@ -15,8 +15,8 @@ namespace Spawner.Realtime
 
 		public string NextEventId() => $"evt_{Interlocked.Increment(ref _seq)}";
 
-		public void Register(WsClient client) => _clients[client.ClientId] = client;
-		public void Unregister(string clientId) => _clients.TryRemove(clientId, out _);
+		public void Register(WsClient client) => _clients[client.SessionId] = client;
+		public void Unregister(string sessionId) => _clients.TryRemove(sessionId, out _);
 
 		public string LastEventId => $"evt_{Volatile.Read(ref _seq)}";
 
