@@ -10,30 +10,37 @@ Spawner is a Minecraft server instance manager with:
 ## Production-ready changes in this repo
 
 - Backend/test targets aligned to `.NET 10`
-- Production CORS behavior defaults to same-origin unless `Cors:AllowedOrigins` is configured
+- Administrator login protects HTTP APIs and WebSocket connections
 - Frontend route-level lazy loading to reduce initial bundle load
 - CI workflow for backend tests + frontend production build
 - Ubuntu Server LTS deployment guide (systemd + nginx)
 
-## Access security: VPN required
+## Access security
 
-Spawner is deployed behind a VPN, which is its access-control boundary. The application does not provide login or endpoint authentication; anyone who can reach it has administrative access, including file management and process launch settings.
+Spawner requires an administrator login. There are no default credentials or public registration. All API endpoints (including files, icons, and exports) and WebSocket connections require authentication; only the session/CSRF bootstrap and login endpoints are public.
 
-- Allow access to the frontend, `/api/`, and `/ws/` only from trusted VPN clients, using firewall rules or a reverse proxy bound to the VPN interface.
-- Keep the backend bound to `127.0.0.1:5000` when nginx runs on the same host. Do not expose that port or the nginx site to the public internet.
-- The nginx example in the deployment guide requires these VPN restrictions. CORS and HTTPS do not replace access control.
-- If public access is needed later, add authentication to both HTTP and WebSocket endpoints before exposing them.
+Configure `Authentication__Username`, `Authentication__PasswordHash`, and `Authentication__PublicOrigin` before starting the backend. Generate the password hash interactively with `python3 scripts/hash-admin-password.py` (16-character minimum). Store the hash in a protected environment file, never in source control. `PublicOrigin` is the exact browser origin, for example `https://spawner.example.com`, without a path.
+
+Production requires HTTPS through a same-origin reverse proxy. Keep the backend on `127.0.0.1:5000`; only loopback proxies are trusted to supply `X-Forwarded-Proto`. See [deployment instructions](docs/ubuntu-server-lts.md) for credentials, TLS, and proxy headers. Cross-origin frontend/API deployments and the old `VITE_API_ORIGIN` / `VITE_WS_ORIGIN` settings are no longer supported.
+
+Sessions use HttpOnly, SameSite=Strict cookies (Secure in production), expire after eight hours without renewal, and are revoked on logout or backend restart. Logout/expiry also disconnects existing sockets. State changes require an antiforgery token and the configured Origin; WebSocket handshakes require that Origin. Login attempts have a global limit of ten per minute. This limits distributed guessing but can temporarily delay legitimate sign-ins during an attack; use edge rate limiting for sustained abuse. Sessions are local to one backend process, so multiple replicas require a shared session store before deployment.
+
+The administrator can upload executable server content and change launch settings. Treat this account as trusted host administration and run Spawner as a dedicated unprivileged OS user. This is not a multi-tenant security boundary. Changing the password hash requires restarting the service, which invalidates existing sessions.
 
 ## Local development
 
 ### Backend
 
 ```bash
+# Generate a hash first, then set these in your local environment:
+export Authentication__Username='admin'
+export Authentication__PasswordHash='<generated hash>'
+export Authentication__PublicOrigin='http://localhost:5173'
 dotnet run --project Spawner
 ```
 
 Notes:
-- Development CORS is permissive for local UI work.
+- Authentication remains required in development; loopback HTTP is allowed.
 - The frontend Vite config proxies `/api` and `/ws` to `http://localhost:5000` in dev.
 
 ### Frontend
@@ -45,11 +52,6 @@ cd Frontend/spawner
 pnpm install --frozen-lockfile
 pnpm run dev
 ```
-
-Optional frontend env variables (`Frontend/spawner/.env`):
-
-- `VITE_API_ORIGIN=http://localhost:5000`
-- `VITE_WS_ORIGIN=ws://localhost:5000`
 
 ## Build for production
 
@@ -106,7 +108,9 @@ Important production settings:
 
 - `ASPNETCORE_ENVIRONMENT=Production`
 - `ASPNETCORE_URLS=http://127.0.0.1:5000`
-- `Cors__AllowedOrigins__0=https://your-domain.example` (if frontend is hosted on a different origin)
+- `Authentication__Username=<administrator username>`
+- `Authentication__PasswordHash=<generated hash>`
+- `Authentication__PublicOrigin=https://your-domain.example`
 - `Settings__DefaultJavaArgs=-Xms4G -Xmx8G`
 
 Runtime requirement:

@@ -1,8 +1,9 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using Spawner.Realtime;
+using Spawner.Services;
 
 namespace Spawner.Controllers;
 
@@ -28,9 +29,14 @@ public sealed class WsV1Controller : ControllerBase
 			return;
 		}
 
-		using var ws = await HttpContext.WebSockets.AcceptWebSocketAsync();
+		var sessionToken = HttpContext.RequestServices.GetRequiredService<AdminAuthentication>().SessionToken(User);
+        if (sessionToken == null) { Response.StatusCode = 401; return; }
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(ct, sessionToken.Value);
+        ct = lifetime.Token;
+        using var ws = await HttpContext.WebSockets.AcceptWebSocketAsync();
+        using var abort = ct.Register(ws.Abort);
 		WsClient? client = null;
-		var sendLoopCts = new CancellationTokenSource();
+		using var sendLoopCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
 
 		try
 		{
@@ -126,6 +132,7 @@ public sealed class WsV1Controller : ControllerBase
 			{
 				var json = await ReceiveTextAsync(ws, ct);
 				if (json is null) break;
+				ct.ThrowIfCancellationRequested();
 				var baseMsg = JsonSerializer.Deserialize<BaseMsg>(json);
 				if (baseMsg == null) continue;
 
@@ -170,6 +177,7 @@ public sealed class WsV1Controller : ControllerBase
 		}
 		finally
 		{
+			lifetime.Cancel();
 			sendLoopCts.Cancel();
 			if (client != null) _bus.Unregister(client.SessionId);
 		}

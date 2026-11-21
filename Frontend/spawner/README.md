@@ -19,20 +19,9 @@ Dev proxy behavior (`vite.config.ts`):
 - `/api` -> `http://localhost:5000`
 - `/ws` -> `ws://localhost:5000`
 
-## Environment variables
+## Authentication
 
-Create `.env` (optional) from `.env.example`:
-
-```bash
-cp .env.example .env
-```
-
-Supported values:
-
-- `VITE_API_ORIGIN` (example: `https://api.example.com`)
-- `VITE_WS_ORIGIN` (example: `wss://api.example.com`)
-
-If unset, the app uses same-origin by default and has localhost convenience fallbacks for dev.
+The UI and API must share one browser origin. Use the Vite proxy locally and the nginx proxy in production. Configure backend administrator credentials and `Authentication__PublicOrigin=http://localhost:5173` for local development; see the root README. The backend must use HTTPS in production. The former `VITE_API_ORIGIN` and `VITE_WS_ORIGIN` overrides are no longer used.
 
 ## Production build
 

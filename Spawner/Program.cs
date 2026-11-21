@@ -1,22 +1,18 @@
 using Spawner;
 using Spawner.Realtime;
 using Spawner.Services;
-using System.IO;
+using Microsoft.AspNetCore.HttpOverrides;
 using System.Net.WebSockets;
 using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
-var allowedCorsOrigins = builder.Configuration
-	.GetSection("Cors:AllowedOrigins")
-	.Get<string[]>()?
-	.Where(static x => !string.IsNullOrWhiteSpace(x))
-	.Select(static x => x.Trim().TrimEnd('/'))
-	.Distinct(StringComparer.OrdinalIgnoreCase)
-	.ToArray() ?? [];
-
 builder.Services.AddControllers();
 
-var contentRoot = builder.Environment.ContentRootPath;
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    // Trust only the framework's loopback proxy defaults, never arbitrary clients.
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedProto;
+});
 builder.Services
 	.AddOptions<Settings>()
 	.Bind(builder.Configuration.GetSection("Settings"))
@@ -31,44 +27,35 @@ builder.Services.AddSingleton<ConsoleStore>();
 builder.Services.AddSingleton<EventBus>();
 builder.Services.AddSingleton<StatePublisher>();
 builder.Services.AddSingleton<ModrinthClient>();
-// CORS:
-// - Development: allow any origin for local UI work.
-// - Production: same-origin by default unless explicit origins are configured.
-builder.Services.AddCors(options =>
-{
-	options.AddDefaultPolicy(policy =>
-	{
-		if (builder.Environment.IsDevelopment())
-		{
-			policy
-				.AllowAnyOrigin()
-				.AllowAnyMethod()
-				.AllowAnyHeader();
-			return;
-		}
-
-		policy
-			.AllowAnyMethod()
-			.AllowAnyHeader();
-
-		if (allowedCorsOrigins.Length > 0)
-		{
-			policy.WithOrigins(allowedCorsOrigins);
-		}
-	});
-});
+AdminAuthentication.Configure(builder);
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
 
-app.UseCors();
+// Validate authentication configuration before initializing managed servers.
+app.Services.GetRequiredService<AdminAuthentication>();
+app.UseForwardedHeaders();
+if (!app.Environment.IsDevelopment())
+{
+    app.Use(async (context, next) =>
+    {
+        if (!context.Request.IsHttps) { context.Response.StatusCode = 400; return; }
+        await next(context);
+    });
+}
+app.UseRouting();
 
 app.UseWebSockets(new WebSocketOptions
 {
 	KeepAliveInterval = TimeSpan.FromSeconds(30)
 });
+
+app.UseAuthentication();
+app.UseAuthorization();
+app.UseRateLimiter();
+app.Use(AdminAuthentication.ProtectRequest);
 
 app.Services.GetRequiredService<InstanceManager>().Initialize();
 app.Services.GetRequiredService<StatePublisher>().HookAllInstances();

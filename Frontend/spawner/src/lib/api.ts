@@ -1,3 +1,4 @@
+import { authFetch } from "@/lib/auth";
 import type { Server } from "@/types/server";
 import { mapApiPropertiesToFormState, mapFormStateToApiProperties } from "@/lib/serverPropertiesMapping";
 import type { ServerPropertiesState } from "@/lib/serverProperties";
@@ -11,27 +12,10 @@ async function readJson<T>(res: Response): Promise<T> {
   return JSON.parse(text) as T;
 }
 
-function apiBase() {
-  const explicit = (import.meta.env.VITE_API_ORIGIN as string | undefined) ?? "";
-  if (explicit) return explicit;
-
-  // Local-dev convenience: if the frontend is on a different localhost port,
-  // default the backend to `:5000` (matches Vite proxy + the default ASP.NET port).
-  try {
-    const { protocol, hostname, port } = window.location;
-    const isLocal = hostname === "localhost" || hostname === "127.0.0.1";
-    if (isLocal && protocol.startsWith("http") && port && port !== "5000") {
-      return `${protocol}//${hostname}:5000`;
-    }
-  } catch {
-    // ignore (e.g. SSR / non-browser)
-  }
-
-  return "";
-}
+function apiBase() { return ""; }
 
 async function apiFetch(path: string, init?: RequestInit) {
-  const res = await fetch(`${apiBase()}${path}`, {
+  const res = await authFetch(`${apiBase()}${path}`, {
     ...init,
     headers: {
       Accept: "application/json",
@@ -151,7 +135,7 @@ export type ApiPropertiesResponse = {
 };
 
 export async function apiGetProperties(serverId: string) {
-  const res = await fetch(`${apiBase()}/api/v1/servers/${encodeURIComponent(serverId)}/properties`, {
+  const res = await authFetch(`${apiBase()}/api/v1/servers/${encodeURIComponent(serverId)}/properties`, {
     headers: { Accept: "application/json" },
   });
 
@@ -524,7 +508,7 @@ export const apiUpdateMod = (serverId: string, fileName: string) => apiModsFileA
 export async function apiImportMrpack(serverId: string, file: File) {
   const form = new FormData();
   form.append("file", file, file.name || "modpack.mrpack");
-  const res = await fetch(`${apiBase()}/api/v1/servers/${encodeURIComponent(serverId)}/mods:import-mrpack`, {
+  const res = await authFetch(`${apiBase()}/api/v1/servers/${encodeURIComponent(serverId)}/mods:import-mrpack`, {
     method: "POST",
     headers: { Accept: "application/json" },
     body: form,

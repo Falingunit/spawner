@@ -36,18 +36,19 @@ The current UI surfaces:
 
 ---
 
-## Auth & Security (recommended)
+## Auth & Security
 
-Any of:
-- Cookie session (same-site)
-- Bearer token: `Authorization: Bearer <token>`
+The implemented API uses a single administrator account and same-origin cookie sessions. Bearer tokens and query-string tokens are not accepted.
 
-WebSocket auth:
-- Prefer header-based auth if supported.
-- Otherwise `wss://<host>/ws/v1?token=<jwt>` (avoid logging tokens in proxies).
+- `GET /api/v1/auth/session` is public and returns `{ authenticated, username, csrfToken }`, setting an HttpOnly antiforgery cookie.
+- `POST /api/v1/auth/login` accepts `{ username, password }` and issues an HttpOnly, SameSite=Strict session cookie (Secure in production). It is limited to ten attempts per minute globally.
+- Refresh `/api/v1/auth/session` after login to get an authenticated CSRF token.
+- Every unsafe request, including login and logout, requires `X-CSRF-Token` plus an `Origin` matching `Authentication:PublicOrigin`.
+- `POST /api/v1/auth/logout` revokes the server-side session and its open WebSockets.
+- Every other endpoint requires authentication and returns 401 for missing/expired sessions; invalid origin/CSRF returns 403, throttling returns 429.
+- WebSocket handshakes use the same cookie and require the configured Origin. Sessions expire after eight hours without renewal and are lost on backend restart.
 
-Authorization considerations:
-- “Read-only” users should not be allowed to start/stop, save properties, whitelist changes, console commands.
+All authenticated users have full administrative privileges. HTTPS and a same-origin reverse proxy are required in production. See the root README for setup.
 
 ---
 

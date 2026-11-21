@@ -109,16 +109,23 @@ Create `/opt/spawner/app/backend/appsettings.Production.json` (or edit the publi
 
 ```json
 {
-  "Cors": {
-    "AllowedOrigins": ["https://your-domain.example"]
-  },
   "Settings": {
     "DefaultJavaArgs": "-Xms4G -Xmx8G"
   }
 }
 ```
 
-If nginx serves the frontend from the same domain and proxies `/api` and `/ws`, you can leave `AllowedOrigins` empty because same-origin requests do not require CORS.
+The frontend, `/api`, and `/ws` must share one HTTPS origin. Before starting the service, generate a password hash using `python3 scripts/hash-admin-password.py` from the source checkout (or copy that script from the release's source archive). It prompts without echoing the password and prints only the salted PBKDF2 hash.
+
+Create `/etc/spawner-auth.env` with mode `0600`, owned by root, containing:
+
+```ini
+Authentication__Username=admin
+Authentication__PasswordHash=pbkdf2-sha256-600000:<generated salt>:<generated digest>
+Authentication__PublicOrigin=https://your-domain.example
+```
+
+Replace the entire hash value with the script output. Do not commit this file or put credentials in frontend variables. There is no default login; missing or invalid configuration prevents startup. Restart the service after rotating credentials to revoke all sessions.
 
 ## 7. systemd service
 
@@ -136,6 +143,7 @@ WorkingDirectory=/opt/spawner/app/backend
 ExecStart=/usr/bin/dotnet /opt/spawner/app/backend/Spawner.dll
 Restart=always
 RestartSec=5
+EnvironmentFile=/etc/spawner-auth.env
 Environment=ASPNETCORE_ENVIRONMENT=Production
 Environment=ASPNETCORE_URLS=http://127.0.0.1:5000
 
@@ -168,6 +176,13 @@ server {
 
     root /opt/spawner/www;
     index index.html;
+
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options DENY always;
+    add_header Referrer-Policy no-referrer always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; connect-src 'self' https://meta.fabricmc.net; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'" always;
+
+    add_header Cache-Control "no-store" always;
 
     location / {
         try_files $uri $uri/ /index.html;
@@ -202,14 +217,18 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-## 9. HTTPS (recommended)
+## 9. HTTPS (required before signing in)
 
-Use Let's Encrypt:
+The HTTP configuration above is only for TLS certificate bootstrap. Use Let's Encrypt and enable its HTTP-to-HTTPS redirect:
 
 ```bash
 sudo apt install -y certbot python3-certbot-nginx
-sudo certbot --nginx -d your-domain.example
+sudo certbot --nginx --redirect -d your-domain.example
 ```
+
+Add `add_header Strict-Transport-Security "max-age=31536000" always;` to the HTTPS server block after verifying TLS works. Keep port 5000 inaccessible externally. The backend rejects production requests without HTTPS, trusting `X-Forwarded-Proto` only from a loopback proxy; do not broaden that trust to arbitrary networks. A remote/container proxy requires an explicit trusted proxy configuration before use.
+
+Verify that `/api/v1/servers` returns 401 without a session, the login page works over HTTPS, and logout prevents further API and WebSocket access. Authentication is single-administrator with full host-management privileges; run the service as the dedicated `spawner` user. A backend restart signs everyone out. Do not configure multiple backend replicas without implementing shared sessions and revocation.
 
 ## 10. Upgrade / redeploy process
 
@@ -301,4 +320,6 @@ script. Prefer the release updater above for production installations.
 - Backend fails to start: `journalctl -u spawner -n 200 --no-pager`
 - API works but UI fails: check nginx `root`, `try_files`, and browser network requests
 - Websocket issues: confirm nginx `/ws/` block includes upgrade headers
-- Cross-origin browser errors: set `Cors:AllowedOrigins` when frontend and backend are on different origins
+- Login returns 403: ensure `Authentication__PublicOrigin` exactly matches the browser origin and proxy `/api` and `/ws` through that same origin.
+- Production requests return 400: verify TLS and the loopback nginx `X-Forwarded-Proto` header.
+- Login returns 429: wait one minute for the global login attempt budget to reset.

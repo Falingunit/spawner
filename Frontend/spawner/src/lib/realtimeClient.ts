@@ -31,29 +31,6 @@ type UnsubscribeMsg = { type: "unsubscribe"; topics: string[] };
 type PongMsg = { type: "pong"; ts?: string };
 
 function wsBase() {
-  const explicit = (import.meta.env.VITE_WS_ORIGIN as string | undefined) ?? "";
-  if (explicit) return explicit;
-
-  const apiOrigin = (import.meta.env.VITE_API_ORIGIN as string | undefined) ?? "";
-  if (apiOrigin) {
-    if (apiOrigin.startsWith("https://")) return "wss://" + apiOrigin.slice("https://".length);
-    if (apiOrigin.startsWith("http://")) return "ws://" + apiOrigin.slice("http://".length);
-    return apiOrigin;
-  }
-
-  // Local-dev convenience: if the frontend is on a different localhost port,
-  // default the backend websocket to `:5000`.
-  try {
-    const { protocol, hostname, port } = window.location;
-    const isLocal = hostname === "localhost" || hostname === "127.0.0.1";
-    if (isLocal && port && port !== "5000") {
-      const proto = protocol === "https:" ? "wss:" : "ws:";
-      return `${proto}//${hostname}:5000`;
-    }
-  } catch {
-    // ignore
-  }
-
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${proto}//${window.location.host}`;
 }

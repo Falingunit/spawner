@@ -1,3 +1,4 @@
+import { authFetch } from "@/lib/auth";
 import * as React from "react";
 import { UnsavedChangesBar } from "@/spawner-components/UnsavedChangesBar";
 
@@ -129,7 +130,7 @@ export function FileExplorer({ serverId, onDirtyChange }: { serverId: string; on
   async function fetchList(path: string) {
     const qs = new URLSearchParams();
     if (path) qs.set("path", path);
-    const res = await fetch(`${apiBaseUrlForBrowser()}/api/v1/servers/${encodeURIComponent(serverId)}/files/list?${qs.toString()}`);
+    const res = await authFetch(`${apiBaseUrlForBrowser()}/api/v1/servers/${encodeURIComponent(serverId)}/files/list?${qs.toString()}`);
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
     const data = (await res.json()) as ListResp;
     return { path: data.path === "." ? "" : (data.path ?? ""), entries: data.entries ?? [] } satisfies ListResp;
@@ -205,7 +206,7 @@ export function FileExplorer({ serverId, onDirtyChange }: { serverId: string; on
     setTextLoading(true);
     try {
       const qs = new URLSearchParams({ path: e.path });
-      const res = await fetch(`${apiBaseUrlForBrowser()}/api/v1/servers/${encodeURIComponent(serverId)}/files/text?${qs.toString()}`);
+      const res = await authFetch(`${apiBaseUrlForBrowser()}/api/v1/servers/${encodeURIComponent(serverId)}/files/text?${qs.toString()}`);
       if (!res.ok) {
         let msg = "";
         try {
@@ -263,7 +264,7 @@ export function FileExplorer({ serverId, onDirtyChange }: { serverId: string; on
     setTextLoading(true);
     try {
       const qs = new URLSearchParams({ path: e.path });
-      const res = await fetch(`${apiBaseUrlForBrowser()}/api/v1/servers/${encodeURIComponent(serverId)}/files/text?${qs.toString()}`);
+      const res = await authFetch(`${apiBaseUrlForBrowser()}/api/v1/servers/${encodeURIComponent(serverId)}/files/text?${qs.toString()}`);
       if (!res.ok) {
         let msg = "";
         try {
@@ -294,7 +295,7 @@ export function FileExplorer({ serverId, onDirtyChange }: { serverId: string; on
     setTextLoading(true);
     try {
       const qs = new URLSearchParams({ path: open.path });
-      const res = await fetch(`${apiBaseUrlForBrowser()}/api/v1/servers/${encodeURIComponent(serverId)}/files/text?${qs.toString()}`, {
+      const res = await authFetch(`${apiBaseUrlForBrowser()}/api/v1/servers/${encodeURIComponent(serverId)}/files/text?${qs.toString()}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
         body: JSON.stringify({ content: textContent }),
@@ -319,7 +320,7 @@ export function FileExplorer({ serverId, onDirtyChange }: { serverId: string; on
     try {
       const rel = joinPath(cwd, trimmed);
       const qs = new URLSearchParams({ path: rel });
-      const res = await fetch(`${apiBaseUrlForBrowser()}/api/v1/servers/${encodeURIComponent(serverId)}/files/create-text?${qs.toString()}`, {
+      const res = await authFetch(`${apiBaseUrlForBrowser()}/api/v1/servers/${encodeURIComponent(serverId)}/files/create-text?${qs.toString()}`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
         body: JSON.stringify({ content: "" }),
@@ -342,7 +343,7 @@ export function FileExplorer({ serverId, onDirtyChange }: { serverId: string; on
     try {
       const rel = joinPath(cwd, trimmed);
       const qs = new URLSearchParams({ path: rel });
-      const res = await fetch(`${apiBaseUrlForBrowser()}/api/v1/servers/${encodeURIComponent(serverId)}/files/mkdir?${qs.toString()}`, {
+      const res = await authFetch(`${apiBaseUrlForBrowser()}/api/v1/servers/${encodeURIComponent(serverId)}/files/mkdir?${qs.toString()}`, {
         method: "POST",
       });
       if (!res.ok) {
@@ -393,7 +394,7 @@ export function FileExplorer({ serverId, onDirtyChange }: { serverId: string; on
   }
 
   async function moveOrCopy(kind: "move" | "copy", src: string, dst: string) {
-    const res = await fetch(`${apiBaseUrlForBrowser()}/api/v1/servers/${encodeURIComponent(serverId)}/files/${kind}`, {
+    const res = await authFetch(`${apiBaseUrlForBrowser()}/api/v1/servers/${encodeURIComponent(serverId)}/files/${kind}`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({ src, dst }),
@@ -458,7 +459,7 @@ export function FileExplorer({ serverId, onDirtyChange }: { serverId: string; on
     try {
       const qs = new URLSearchParams({ path: entry.path });
       if (entry.isDir) qs.set("recursive", "true");
-      const res = await fetch(`${apiBaseUrlForBrowser()}/api/v1/servers/${encodeURIComponent(serverId)}/files?${qs.toString()}`, { method: "DELETE" });
+      const res = await authFetch(`${apiBaseUrlForBrowser()}/api/v1/servers/${encodeURIComponent(serverId)}/files?${qs.toString()}`, { method: "DELETE" });
       if (!res.ok) {
         const msg = await res.text();
         throw new Error(msg || `${res.status} ${res.statusText}`);
@@ -546,7 +547,7 @@ export function FileExplorer({ serverId, onDirtyChange }: { serverId: string; on
       const form = new FormData();
       for (const f of Array.from(files)) form.append("files", f, f.name);
 
-      const res = await fetch(`${apiBaseUrlForBrowser()}/api/v1/servers/${encodeURIComponent(serverId)}/files/upload?${qs.toString()}`, {
+      const res = await authFetch(`${apiBaseUrlForBrowser()}/api/v1/servers/${encodeURIComponent(serverId)}/files/upload?${qs.toString()}`, {
         method: "POST",
         body: form,
       });

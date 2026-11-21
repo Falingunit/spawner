@@ -1,3 +1,4 @@
+import { authFetch } from "@/lib/auth";
 import * as React from "react";
 import { UnsavedChangesBar } from "@/spawner-components/UnsavedChangesBar";
 import { useParams } from "react-router-dom";
@@ -908,7 +909,7 @@ export default function ServerPage() {
     // 1) delete previous backup, 2) move current icon to .old (best-effort), 3) upload new icon as server-icon.png
     const base = apiBaseUrlForBrowser();
 
-    const delOld = await fetch(
+    const delOld = await authFetch(
       `${base}/api/v1/servers/${encodeURIComponent(serverId)}/files?${new URLSearchParams({ path: "server-icon.png.old" }).toString()}`,
       { method: "DELETE" },
     );
@@ -917,7 +918,7 @@ export default function ServerPage() {
       throw new Error(t || `${delOld.status} ${delOld.statusText}`);
     }
 
-    const move = await fetch(`${base}/api/v1/servers/${encodeURIComponent(serverId)}/files/move`, {
+    const move = await authFetch(`${base}/api/v1/servers/${encodeURIComponent(serverId)}/files/move`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({ src: "server-icon.png", dst: "server-icon.png.old" }),
@@ -937,7 +938,7 @@ export default function ServerPage() {
 
     const form = new FormData();
     form.append("files", file, "server-icon.png");
-    const upload = await fetch(`${base}/api/v1/servers/${encodeURIComponent(serverId)}/files/upload`, { method: "POST", body: form });
+    const upload = await authFetch(`${base}/api/v1/servers/${encodeURIComponent(serverId)}/files/upload`, { method: "POST", body: form });
     if (!upload.ok) {
       const t = await upload.text();
       throw new Error(t || `${upload.status} ${upload.statusText}`);
