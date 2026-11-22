@@ -51,14 +51,20 @@ STOPPED=false
 PRESERVE=(--exclude='/appsettings*.json' --exclude='/Instances' --exclude='/Spawner' --exclude='/JavaRuntimes')
 health() {
   local i
+  echo "Waiting for $SERVICE API at $API_URL..."
   for ((i=0; i<HEALTH_ATTEMPTS; i++)); do
-    if systemctl is-active --quiet "$SERVICE" &&
+    if {
+      systemctl is-active --quiet "$SERVICE" &&
       curl -fsS --max-time 5 "$API_URL/api/v1/servers" -o "$STAGING/health.json" &&
-      python3 -c 'import json,sys; assert isinstance(json.load(open(sys.argv[1]))["servers"], list)' "$STAGING/health.json"; then
+      python3 -c 'import json,sys; assert isinstance(json.load(open(sys.argv[1]))["servers"], list)' "$STAGING/health.json"
+    } >"$STAGING/health-error.log" 2>&1; then
       return 0
     fi
     sleep 2
   done
+  echo "API health check failed after $HEALTH_ATTEMPTS attempts at $API_URL." >&2
+  cat "$STAGING/health-error.log" >&2
+  echo "Check service status and startup logs: systemctl status $SERVICE; journalctl -u $SERVICE -n 100 --no-pager" >&2
   return 1
 }
 finish() {

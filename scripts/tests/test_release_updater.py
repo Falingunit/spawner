@@ -63,7 +63,12 @@ elif '/download/' in url:
     if scenario == 'missing': sys.exit(22)
     shutil.copyfile(root / 'release.tar.gz', out)
 else:
+    if scenario == 'slow-start' and (root / 'install/app/backend/Spawner.dll').read_text() == 'new' and not (root / 'startup-retried').exists():
+        (root / 'startup-retried').touch()
+        print('curl: (7) Failed to connect', file=sys.stderr)
+        sys.exit(7)
     if scenario == 'unhealthy' and (root / 'install/app/backend/Spawner.dll').read_text() == 'new':
+        print('curl: (22) HTTP error', file=sys.stderr)
         sys.exit(22)
     out.write_text(json.dumps({'servers': [{'id': 'test', 'status': 'running' if scenario == 'busy' else 'offline'}]}))
 ''')
@@ -130,10 +135,24 @@ else:
         result = self.run_update('unhealthy')
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('Previous application restored', result.stderr)
+        self.assertIn('API health check failed after 1 attempts', result.stderr)
+        self.assertIn('curl: (22) HTTP error', result.stderr)
+        self.assertIn('journalctl -u spawner', result.stderr)
         self.assertEqual((self.backend / 'Spawner.dll').read_text(), 'old')
         self.assertEqual((self.frontend / 'index.html').read_text(), 'old UI')
         self.assertTrue((self.backend / 'obsolete.dll').exists())
         self.assert_preserved()
+
+    def test_startup_connection_failure_is_retried_quietly(self):
+        with (self.root / 'config').open('a') as config:
+            config.write('HEALTH_ATTEMPTS=2\n')
+        result = self.run_update('slow-start')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((self.root / 'startup-retried').exists())
+        self.assertIn('Waiting for spawner API', result.stdout)
+        self.assertIn('Updated to commit-', result.stdout)
+        self.assertNotIn('curl:', result.stderr)
+        self.assertEqual((self.backend / 'Spawner.dll').read_text(), 'new')
 
     def test_busy_instances_leave_service_untouched(self):
         result = self.run_update('busy')

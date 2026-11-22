@@ -272,6 +272,13 @@ the previous application files and attempts to restart the previous backend.
 It prevents concurrent updater runs. Minecraft instances remain stopped; refresh
 the UI, verify the update, and start them when ready. Nginx does not need restarting.
 
+After restarting, the updater waits for the API to become ready, retrying up to
+`HEALTH_ATTEMPTS` times (default 30) with two seconds between checks. Older updater
+versions print temporary curl connection errors during this wait; a single error
+does not mean the update failed. Look for the final `Updated to commit-...` message
+or a rollback message. If readiness checks fail, inspect
+`sudo journalctl -u spawner -n 100 --no-pager` for startup errors.
+
 Existing `appsettings*.json` files and backend directories `Instances`, `Spawner`,
 and `JavaRuntimes` are preserved. New configuration files are installed only when
 absent; merge new settings from release notes manually. Normal instance data and
