@@ -96,6 +96,11 @@ and restores the previous application files if startup fails. You can also pass
 configuration and backup details. New releases include a standalone
 `spawner-update` asset for servers without a checkout.
 
+Before upgrading a pre-login installation, run `sudo spawner-update --configure-auth`
+to set the admin username, public HTTPS origin and password in the production
+configuration. On later updates, the updater prompts for login to verify that all
+instances are stopped. See the deployment guide if you use environment overrides.
+
 ## Ubuntu Server LTS install / setup
 
 See `docs/ubuntu-server-lts.md`.

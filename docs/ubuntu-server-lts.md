@@ -267,7 +267,11 @@ sudo spawner-update commit-<full-40-character-sha>
 The updater downloads and validates the package before stopping the service,
 checks that all instances are offline, backs up backend/frontend files to
 `/opt/spawner-backups`, installs both components, and checks the running backend's
-`/api/v1/servers` endpoint. A deployment or startup failure automatically restores
+anonymous `/api/v1/auth/session` endpoint. Before stopping the service, it checks
+`/api/v1/servers`; on auth-enabled installations it prompts for the administrator
+username, password and public HTTPS origin, logs in with CSRF protection, checks
+the instance states, and logs out. Credentials are not stored. Run it from an
+interactive terminal. A deployment or startup failure automatically restores
 the previous application files and attempts to restart the previous backend.
 It prevents concurrent updater runs. Minecraft instances remain stopped; refresh
 the UI, verify the update, and start them when ready. Nginx does not need restarting.
@@ -278,6 +282,33 @@ versions print temporary curl connection errors during this wait; a single error
 does not mean the update failed. Look for the final `Updated to commit-...` message
 or a rollback message. If readiness checks fail, inspect
 `sudo journalctl -u spawner -n 100 --no-pager` for startup errors.
+
+When upgrading an installation from before login was introduced, install the
+latest updater and configure authentication **before** updating:
+
+```bash
+curl -fL https://raw.githubusercontent.com/Falingunit/spawner/master/scripts/update-spawner-release.sh -o /tmp/spawner-update &&
+sudo install -m 0755 /tmp/spawner-update /usr/local/bin/spawner-update
+sudo spawner-update --configure-auth
+sudo spawner-update
+```
+
+The setup command prompts for the administrator username, the exact public HTTPS
+origin used in the browser (no path), and a new password. It writes a salted
+password hash to `appsettings.Production.json`, preserves other settings, and saves
+a protected backup of the previous config. It does not restart the service.
+The service must use `ASPNETCORE_ENVIRONMENT=Production`. This is an alternative
+to the environment-file configuration in section 6; an environment file is not
+required with this method. Existing `Authentication__*` environment variables
+override JSON settings and must be updated or removed separately.
+
+Readiness checks support both auth-enabled releases and older releases during
+rollback. For a literal loopback API address, the updater supplies
+`X-Forwarded-Proto: https` through ASP.NET's trusted loopback proxy boundary and
+handles secure cookies locally. Other API addresses must use HTTPS. Authentication
+and the check for busy instances remain enforced; 400/401 responses are not treated
+as healthy. A missing or invalid login configuration still fails startup and
+triggers rollback.
 
 Existing `appsettings*.json` files and backend directories `Instances`, `Spawner`,
 and `JavaRuntimes` are preserved. New configuration files are installed only when
